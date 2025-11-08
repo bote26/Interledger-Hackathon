@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register - Open Payments</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="auth-box">
+      <h1>Open Payments Registration</h1>
+      <p class="subtitle">Complete KYC verification to create your account</p>
+
+      <% if (typeof error !== 'undefined') { %>
+        <div class="error-message"><%= error %></div>
+      <% } %>
+
+      <form action="/auth/register" method="POST">
+        <div class="form-section">
+          <h3>Account Information</h3>
+          
+          <div class="form-group">
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" required>
+          </div>
+
+          <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required>
+          </div>
+
+          <div class="form-group">
+            <label for="account_type">Account Type:</label>
+            <select id="account_type" name="account_type" required onchange="toggleParentField()">
+              <option value="">Select account type</option>
+              <option value="father">Father (Parent Account)</option>
+              <option value="child">Child (Managed Account)</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="parent_field" style="display: none;">
+            <label for="parent_email">Parent Email:</label>
+            <input type="email" id="parent_email" name="parent_email">
+            <small>Enter the email of the father account that will manage this child account</small>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>KYC Information</h3>
+
+          <div class="form-group">
+            <label for="full_name">Full Name:</label>
+            <input type="text" id="full_name" name="full_name" required>
+          </div>
+
+          <div class="form-group">
+            <label for="date_of_birth">Date of Birth:</label>
+            <input type="date" id="date_of_birth" name="date_of_birth" required>
+          </div>
+
+          <div class="form-group">
+            <label for="id_number">ID Number:</label>
+            <input type="text" id="id_number" name="id_number" required>
+            <small>Driver's License, Passport, or National ID number</small>
+          </div>
+
+          <div class="form-group">
+            <label for="phone">Phone Number:</label>
+            <input type="tel" id="phone" name="phone" required>
+          </div>
+
+          <div class="form-group">
+            <label for="address">Address:</label>
+            <textarea id="address" name="address" rows="3" required></textarea>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Register</button>
+      </form>
+
+      <p class="text-center">
+        Already have an account? <a href="/auth/login">Login here</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    function toggleParentField() {
+      const accountType = document.getElementById('account_type').value;
+      const parentField = document.getElementById('parent_field');
+      const parentEmail = document.getElementById('parent_email');
+      
+      if (accountType === 'child') {
+        parentField.style.display = 'block';
+        parentEmail.required = true;
+      } else {
+        parentField.style.display = 'none';
+        parentEmail.required = false;
+      }
+    }
+  </script>
+</body>
+</html>

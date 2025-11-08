@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Open Payments</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <header class="dashboard-header">
+      <h1>Open Payments Dashboard</h1>
+      <div class="user-info">
+        <span>Welcome, <%= user.full_name %> (Child Account)</span>
+        <a href="/auth/logout" class="btn btn-secondary">Logout</a>
+      </div>
+    </header>
+
+    <div class="dashboard-content">
+      <!-- Wallet Information -->
+      <div class="card">
+        <h2>Your Wallet</h2>
+        <div class="wallet-balance">
+          <span class="currency">$</span>
+          <span class="amount"><%= wallet.balance.toFixed(2) %></span>
+        </div>
+        <p class="wallet-id">Wallet ID: <%= wallet.id %></p>
+        <% if (parent) { %>
+          <p class="text-muted">Managed by: <%= parent.full_name %> (<%= parent.email %>)</p>
+        <% } %>
+      </div>
+
+      <!-- Transaction History -->
+      <div class="card">
+        <h2>Recent Transactions</h2>
+        <% if (transactions.length === 0) { %>
+          <p class="text-muted">No transactions yet.</p>
+        <% } else { %>
+          <div class="transactions-list">
+            <% transactions.forEach(tx => { %>
+              <div class="transaction-item">
+                <div class="transaction-info">
+                  <span class="transaction-type">
+                    <% if (tx.from_wallet_id === wallet.id) { %>
+                      Sent to User #<%= tx.to_user_id %>
+                    <% } else { %>
+                      Received from User #<%= tx.from_user_id %>
+                    <% } %>
+                  </span>
+                  <% if (tx.description) { %>
+                    <span class="transaction-desc"><%= tx.description %></span>
+                  <% } %>
+                </div>
+                <div class="transaction-amount <%= tx.from_wallet_id === wallet.id ? 'negative' : 'positive' %>">
+                  <%= tx.from_wallet_id === wallet.id ? '-' : '+' %>$<%= tx.amount.toFixed(2) %>
+                </div>
+                <div class="transaction-date">
+                  <%= new Date(tx.created_at).toLocaleString() %>
+                </div>
+              </div>
+            <% }); %>
+          </div>
+        <% } %>
+      </div>
+
+      <!-- Information -->
+      <div class="card info-card">
+        <h3>Account Information</h3>
+        <p>As a child account, your parent has full control over transfers in and out of your wallet.</p>
+        <p>Your parent can view your balance and transaction history.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
