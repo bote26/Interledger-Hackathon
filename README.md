@@ -138,8 +138,9 @@ Interledger-Hackathon/
 - Password hashing with bcryptjs
 - Session-based authentication
 - SQL injection prevention with prepared statements
-- CSRF protection through session validation
 - Input validation
+
+**Note**: This is a demo application. See [SECURITY.md](SECURITY.md) for production security requirements including rate limiting, HTTPS/SSL, and CSRF protection.
 
 ## Demo Flow
 
