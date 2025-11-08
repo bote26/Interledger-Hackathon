@@ -13,19 +13,19 @@ function isAuthenticated(req, res, next) {
 }
 
 // Dashboard
-router.get('/', isAuthenticated, (req, res) => {
+router.get('/', isAuthenticated, async (req, res) => {
   try {
-    const user = User.findById(req.session.userId);
-    const wallet = Wallet.findByUserId(user.id);
-    const transactions = Transaction.getByWalletId(wallet.id);
+    const user = await User.findById(req.session.userId);
+    if (!user) return res.status(404).send('User not found');
+    const wallet = await Wallet.findByUserId(user.id);
+    const transactions = wallet ? await Transaction.getByWalletId(wallet.id) : [];
 
     if (user.account_type === 'father') {
-      // Get children accounts
-      const children = User.getChildren(user.id);
-      const childrenWithWallets = children.map(child => {
-        const childWallet = Wallet.findByUserId(child.id);
+      const children = await User.getChildren(user.id);
+      const childrenWithWallets = await Promise.all(children.map(async child => {
+        const childWallet = await Wallet.findByUserId(child.id);
         return { ...child, wallet: childWallet };
-      });
+      }));
 
       res.render('dashboard-father', {
         user,
@@ -34,8 +34,7 @@ router.get('/', isAuthenticated, (req, res) => {
         transactions
       });
     } else {
-      // Child account
-      const parent = user.parent_id ? User.findById(user.parent_id) : null;
+      const parent = user.parent_id ? await User.findById(user.parent_id) : null;
       res.render('dashboard-child', {
         user,
         wallet,
@@ -50,9 +49,9 @@ router.get('/', isAuthenticated, (req, res) => {
 });
 
 // Transfer money (for father accounts)
-router.post('/transfer', isAuthenticated, (req, res) => {
+router.post('/transfer', isAuthenticated, async (req, res) => {
   try {
-    const user = User.findById(req.session.userId);
+    const user = await User.findById(req.session.userId);
 
     if (user.account_type !== 'father') {
       return res.status(403).json({ error: 'Only father accounts can transfer money' });
@@ -65,31 +64,48 @@ router.post('/transfer', isAuthenticated, (req, res) => {
       return res.status(400).json({ error: 'Amount must be positive' });
     }
 
-    // Verify the father has access to both accounts
-    const fromUser = User.findById(parseInt(from_user_id));
-    const toUser = User.findById(parseInt(to_user_id));
+    const fromUser = await User.findById(from_user_id);
+    const toUser = await User.findById(to_user_id);
 
     if (!fromUser || !toUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Father can transfer from their own account or any child account
     const canAccessFrom = fromUser.id === user.id || fromUser.parent_id === user.id;
-    // Father can transfer to their own account or any child account
     const canAccessTo = toUser.id === user.id || toUser.parent_id === user.id;
 
     if (!canAccessFrom || !canAccessTo) {
       return res.status(403).json({ error: 'You do not have permission to perform this transfer' });
     }
 
-    const fromWallet = Wallet.findByUserId(fromUser.id);
-    const toWallet = Wallet.findByUserId(toUser.id);
+    // Create ILP transaction (returns interactive grant URL if needed)
+    const result = await Transaction.create(fromUser.id, toUser.id, transferAmount, description);
 
-    Transaction.create(fromWallet.id, toWallet.id, transferAmount, description);
+    if (result.requiresInteraction) {
+      return res.json({ 
+        success: false,
+        requiresInteraction: true,
+        interactUrl: result.interactUrl,
+        transactionId: result.transactionId,
+        message: result.message
+      });
+    }
 
     res.json({ success: true, message: 'Transfer completed successfully' });
   } catch (error) {
     console.error('Transfer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Complete pending transaction after grant approval
+router.post('/complete-transfer/:transactionId', isAuthenticated, async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    await Transaction.completePendingTransaction(transactionId);
+    res.json({ success: true, message: 'Transfer completed successfully' });
+  } catch (error) {
+    console.error('Complete transfer error:', error);
     res.status(500).json({ error: error.message });
   }
 });

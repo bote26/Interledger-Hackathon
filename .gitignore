@@ -3,3 +3,6 @@ node_modules/
 *.log
 .DS_Store
 database.db
+firebase_conn.json
+private.key
+public.key
