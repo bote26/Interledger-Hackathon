@@ -75,8 +75,7 @@ function renderTransactions(tableEl, items) {
     } else {
       date = new Date().toLocaleString();
     }
-    const scale = (it.assetScale != null) ? it.assetScale : 2; // default to cents when missing
-    const amount = it.amountAtomic ? (Number(it.amountAtomic) / (10 ** (scale))).toFixed(scale) : '';
+  const amount = it.amountHuman ? it.amountHuman : (it.amountAtomic ? (Number(it.amountAtomic) / (10 ** ((it.assetScale != null) ? it.assetScale : 2))).toFixed((it.assetScale != null) ? it.assetScale : 2) : '');
     tr.innerHTML = `<td>${it.direction}</td><td>${it.assetCode || ''} ${amount}</td><td>${it.status || ''}</td><td>${date}</td>`;
     tableEl.appendChild(tr);
   }

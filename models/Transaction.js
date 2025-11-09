@@ -223,6 +223,12 @@ class Transaction {
   const assetCode = amountObj ? (amountObj.assetCode || amountObj.currency || amountObj.asset || null) : null;
   const assetScale = amountObj ? (amountObj.assetScale ?? amountObj.scale ?? null) : null;
 
+      // Compute human-readable amount string from atomic value and assetScale
+      const atomicStr = amountValue ? String(amountValue) : null;
+      const computedAmountHuman = (atomicStr && assetScale != null) ?
+        Transaction.atomicToHumanString(atomicStr, Number(assetScale)) :
+        (atomicStr || null);
+
       const doc = {
         userId,
         direction,
@@ -230,6 +236,8 @@ class Transaction {
         status,
           // store atomic amount as string for precision
           amountAtomic: amountValue ? amountValue.toString() : null,
+        // human-friendly decimal representation (string)
+        amountHuman: computedAmountHuman,
         assetCode,
         assetScale,
         raw: item,
@@ -365,7 +373,97 @@ class Transaction {
         out.errors.push({ kind: 'balanceRead', error: err && err.message ? err.message : String(err) });
       }
 
+      // After syncing from provider, try to remove temporal local_* transaction docs
+      // that were created as fallbacks. If the provider persisted a transaction
+      // with the same amount and direction for this user, the local doc is
+      // redundant and can be removed.
+      try {
+        await this._cleanupLocalDuplicates(userId);
+      } catch (e) {
+        console.warn('[Transaction.syncUser] cleanupLocalDuplicates failed', e && e.message ? e.message : e);
+      }
+
       return out;
+    }
+
+    /**
+     * Remove local_* transactions for a given user when a provider-backed
+     * transaction with the same amount and direction exists. This treats local
+     * records as temporal fallbacks and helps avoid duplicate rows.
+     */
+    static async _cleanupLocalDuplicates(userId) {
+      try {
+        // Find local transaction docs for this user (transactionId starting with 'local_')
+        const localQuery = db.collection('transactions')
+          .where('userId', '==', String(userId))
+          .where('transactionId', '>=', 'local_')
+          .where('transactionId', '<', 'local_\uf8ff');
+
+        const localSnap = await localQuery.get();
+        if (localSnap.empty) return;
+
+        const toDelete = [];
+
+        for (const d of localSnap.docs) {
+          const data = d.data();
+          // only consider well-formed local docs
+          if (!data || !data.amountAtomic || !data.direction) continue;
+          const amountAtomic = String(data.amountAtomic);
+          const direction = data.direction;
+
+          // Look for any non-local transaction that matches amount and direction
+          const candidatesQ = db.collection('transactions')
+            .where('userId', '==', String(userId))
+            .where('amountAtomic', '==', amountAtomic)
+            .where('direction', '==', direction)
+            .limit(5);
+
+          const candSnap = await candidatesQ.get();
+          let foundProvider = false;
+          for (const c of candSnap.docs) {
+            const cd = c.data();
+            if (!cd) continue;
+            // If the transactionId does NOT start with 'local_' then it's provider/backed
+            const tid = cd.transactionId || '';
+            if (!tid.startsWith('local_')) {
+              foundProvider = true;
+              break;
+            }
+          }
+
+          if (foundProvider) {
+            // mark this local doc for deletion
+            toDelete.push(d.ref);
+            // also attempt to delete the paired local doc (incoming/outgoing)
+            // our local doc ids are typically created as `${txId}_out` and `${txId}_in`
+            const id = d.id || '';
+            const base = id.replace(/_out$|_in$/, '');
+            const outId = `${base}_out`;
+            const inId = `${base}_in`;
+            const outRef = db.collection('transactions').doc(outId);
+            const inRef = db.collection('transactions').doc(inId);
+            // avoid duplicates
+            if (!toDelete.find(r => r.path === outRef.path)) toDelete.push(outRef);
+            if (!toDelete.find(r => r.path === inRef.path)) toDelete.push(inRef);
+          }
+        }
+
+        if (toDelete.length === 0) return;
+
+        // Batch delete the identified docs (max 500 operations per batch)
+        const BATCH_SIZE = 400;
+        for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
+          const batch = db.batch();
+          const slice = toDelete.slice(i, i + BATCH_SIZE);
+          slice.forEach(ref => batch.delete(ref));
+          await batch.commit();
+        }
+
+        console.debug('[Transaction._cleanupLocalDuplicates] removed', toDelete.length, 'local docs for user', userId);
+      } catch (err) {
+        console.error('[Transaction._cleanupLocalDuplicates] failed for', userId, err && err.message ? err.message : err);
+        throw err;
+      }
     }
 
     /**
@@ -436,6 +534,30 @@ class Transaction {
     }
 
     /**
+     * Convert an atomic integer string to a human-decimal string using assetScale.
+     * Example: atomic='1234', scale=2 -> '12.34'
+     */
+    static atomicToHumanString(atomicStr, assetScale = 0) {
+      try {
+        const s = String(atomicStr || '0');
+        const negative = s.startsWith('-');
+        const v = negative ? s.slice(1) : s;
+        const pad = Number(assetScale) || 0;
+        if (pad <= 0) return (negative ? '-' : '') + v;
+        if (v.length <= pad) {
+          const zeros = '0'.repeat(pad - v.length);
+          const frac = zeros + v;
+          return (negative ? '-' : '') + `0.${frac}`;
+        }
+        const intPart = v.slice(0, v.length - pad);
+        const fracPart = v.slice(v.length - pad).padEnd(pad, '0');
+        return (negative ? '-' : '') + `${intPart}.${fracPart}`;
+      } catch (e) {
+        return String(atomicStr || '0');
+      }
+    }
+
+    /**
      * Convert a human amount (e.g. "12.34") to atomic units (BigInt) using assetScale.
      * If amount is already an integer-like value (no dot) it's treated as atomic when assetScale is 0.
      */
@@ -446,12 +568,13 @@ class Transaction {
       const negative = s.startsWith('-');
       const v = negative ? s.slice(1) : s;
       if (!v.includes('.')) {
-        // No decimal point: treat as whole units; multiply by 10^assetScale
+        // No decimal point: treat the provided number as atomic units (smallest currency unit).
+        // Example: entering "100" means 100 cents when assetScale=2.
         try {
-          const whole = BigInt(v);
-          return negative ? -whole * (10n ** BigInt(assetScale)) : whole * (10n ** BigInt(assetScale));
+          const atomic = BigInt(v);
+          return negative ? -atomic : atomic;
         } catch (e) {
-          // fallback parse via BigInt of scaled string
+          // fallback parse via BigInt of scaled string if something unexpected
         }
       }
       const [intPart, fracPartRaw] = v.split('.');
@@ -474,6 +597,10 @@ class Transaction {
     static async recordLocalTransfer(fromUserId, toUserId, amountHuman, { assetCode = null, assetScale = 0, description = null, reference = null } = {}) {
       // Compute atomic amount
       const atomic = this.humanToAtomic(amountHuman, assetScale);
+      // Debug: log conversion inputs and result to help trace scale/precision issues
+      try {
+        console.debug('[recordLocalTransfer] from=', fromUserId, 'to=', toUserId, 'amountHuman=', amountHuman, 'assetScale=', assetScale, 'amountAtomic=', atomic.toString());
+      } catch (e) { }
       if (atomic === 0n) throw new Error('Amount must be non-zero');
 
       const txId = `local_${crypto.randomUUID()}`;
@@ -487,6 +614,7 @@ class Transaction {
         transactionId: txId,
         status: 'Completed',
         amountAtomic: atomic.toString(),
+        amountHuman: Transaction.atomicToHumanString(atomic.toString(), assetScale),
         assetCode,
         assetScale,
         raw: { type: 'local_transfer', reference, description, toUserId },
@@ -499,6 +627,7 @@ class Transaction {
         transactionId: txId,
         status: 'Completed',
         amountAtomic: atomic.toString(),
+        amountHuman: Transaction.atomicToHumanString(atomic.toString(), assetScale),
         assetCode,
         assetScale,
         raw: { type: 'local_transfer', reference, description, fromUserId },

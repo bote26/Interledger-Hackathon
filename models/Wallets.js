@@ -2,12 +2,8 @@ const { createAuthenticatedClient, OpenPaymentsClientError, isFinalizedGrant } =
 const path = require('path');
 const fs = require('fs');
 const User = require('./User');
+const Transaction = require('./Transaction');
 
-const readline = require('readline/promises');
-
-const { db } = require('../db/firebase');
-const { FieldValue } = require('firebase-admin/firestore');
-const { send } = require('process');
 const { exec } = require('child_process');
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -110,6 +106,11 @@ class Wallet {
   
   // Step 3: Create the incoming payment. This will be where funds will be received.
 
+    // Convert the provided human amount into atomic units according to the
+    // receiving wallet's assetScale. The provider expects atomic integer values
+    // (smallest currency unit), so sending `100` with assetScale=2 should become `10000`.
+    const atomicAmount = Transaction.humanToAtomic(amount, receivingWalletAddress.assetScale);
+
     const incomingPayment = await client.incomingPayment.create(
       {
         url: receivingWalletAddress.resourceServer,
@@ -117,11 +118,12 @@ class Wallet {
       },
     {
       walletAddress: receivingWalletAddress.id,
-      incomingAmount: {
-        assetCode: receivingWalletAddress.assetCode,
-        assetScale: receivingWalletAddress.assetScale,
-        value: amount.toString()
-      },
+        incomingAmount: {
+          assetCode: receivingWalletAddress.assetCode,
+          assetScale: receivingWalletAddress.assetScale,
+          // send atomic integer string
+          value: atomicAmount.toString()
+        },
       expiresAt: new Date(Date.now() + 60_000 * 10 ).toISOString() // 1 hour from now
     }
   );
@@ -289,15 +291,9 @@ console.error('a')
     '\nStep 7: Created outgoing payment. Funds will now move from the outgoing payment to the incoming payment.',
     outgoingPayment
   )
-
-//   process.exit()
+  // Return provider artifacts so callers can decide whether to record local transfers
+  return { incomingPayment, outgoingPayment };
     }
-  static async request(fromUserId, toWalletAddressUrl, amount){
-        // Implementation for requesting money can go here
-
-
-    }
-
 
 }
 

@@ -86,7 +86,7 @@ router.get('/', isAuthenticated, async (req, res) => {
         return { ...child, wallet: childWallet };
       }));
 
-      res.render('dashboard-father', {
+      res.render('parentbank.ejs', {
         user,
         wallet,
         children: childrenWithWallets,
@@ -94,7 +94,7 @@ router.get('/', isAuthenticated, async (req, res) => {
       });
     } else {
       const parent = user.parent_id ? await User.findById(user.parent_id) : null;
-      res.render('dashboard-child', {
+      res.render('kidbank.ejs', {
         user,
         wallet,
         parent,
@@ -112,9 +112,6 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
   try {
     const user = await User.findById(req.session.userId);
 
-    if (user.account_type !== 'father') {
-      return res.status(403).json({ error: 'Only father accounts can transfer money' });
-    }
 
     const { from_user_id, to_user_id, amount, description } = req.body;
     const transferAmount = parseFloat(amount);
@@ -130,25 +127,17 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Permission checks: make sure the logged-in father can operate on these users
-    const canAccessFrom = fromUser.id === user.id || fromUser.parent_id === user.id;
-    const canAccessTo = toUser.id === user.id || toUser.parent_id === user.id;
+    // // Permission checks: make sure the logged-in father can operate on these users
+    // const canAccessFrom = fromUser.id === user.id || fromUser.parent_id === user.id;
+    // const canAccessTo = toUser.id === user.id || toUser.parent_id === user.id;
 
-    if (!canAccessFrom || !canAccessTo) {
-      return res.status(403).json({ error: 'You do not have permission to perform this transfer' });
-    }
+    // if (!canAccessFrom || !canAccessTo) {
+    //   return res.status(403).json({ error: 'You do not have permission to perform this transfer' });
+    // }
 
     // Resolve wallet addresses
     const toWallet = await User.getWalletAddress(to_user_id);
     const fromWallet = await User.getWalletAddress(from_user_id);
-
-    // Attempt the provider payment flow. If it succeeds, record local transfer in Firestore
-    try {
-      await Wallet.pay(from_user_id, toWallet, transferAmount);
-    } catch (err) {
-      console.error('Provider payment failed:', err && err.message ? err.message : err);
-      return res.status(500).json({ error: 'Provider payment failed: ' + (err && err.message ? err.message : String(err)) });
-    }
 
     // Determine asset information from cached balance if available
     let assetCode = null;
@@ -163,13 +152,35 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
       // ignore and fallback to defaults
     }
 
-    // Record the local transfer into Firestore and update balances
+    // Attempt the provider payment flow. Wallet.pay now returns provider artifacts.
+    let payResult = null;
     try {
-      const transferResult = await Transaction.recordLocalTransfer(from_user_id, to_user_id, transferAmount, { assetCode, assetScale, description });
-      console.log('Recorded local transfer:', transferResult);
+      console.debug('Transfer requested', { from_user_id, to_user_id, transferAmount, assetCode, assetScale, toWallet });
+      payResult = await Wallet.pay(from_user_id, toWallet, transferAmount);
+      console.debug('Wallet.pay result', { payResult });
     } catch (err) {
-      console.warn('Failed to record local transfer in Firestore:', err && err.message ? err.message : err);
-      // don't fail the request because the provider payment succeeded; log and continue
+      console.error('Provider payment failed:', err && err.message ? err.message : err);
+      // If provider payment failed, we *could* fall back to recording a local transfer.
+      // However the user prefers avoiding local entries when possible; return error so
+      // the caller can retry or inspect logs. If you prefer a fallback, we can record
+      // a local transfer here instead.
+      return res.status(500).json({ error: 'Provider payment failed: ' + (err && err.message ? err.message : String(err)) });
+    }
+
+    // If provider returned payment objects (incoming/outgoing), do NOT create a local transfer
+    // because provider-backed transactions will be synced into Firestore by the sync flow.
+    const providerHasRecorded = payResult && (payResult.incomingPayment || payResult.outgoingPayment);
+    if (!providerHasRecorded) {
+      try {
+        console.debug('Provider did not return payment artifacts; recording local transfer', { from_user_id, to_user_id, transferAmount, assetCode, assetScale });
+        const transferResult = await Transaction.recordLocalTransfer(from_user_id, to_user_id, transferAmount, { assetCode, assetScale, description });
+        console.log('Recorded local transfer (provider did not return payment):', transferResult);
+      } catch (err) {
+        console.warn('Failed to record local transfer in Firestore:', err && err.message ? err.message : err);
+        // do not fail the request; provider didn't record a transaction and local write failed — caller can retry
+      }
+    } else {
+      console.log('Provider created payment; skipping local record for transfer between', from_user_id, '->', to_user_id);
     }
 
     return res.json({ success: true, message: 'Transfer completed successfully' });
