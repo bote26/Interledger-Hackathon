@@ -44,7 +44,8 @@ A web-based open payments application built with Node.js that allows parent acco
 
 - Node version v22.21.1
 - Npm already installed
-- Having a Firebase connection and a firebase_conn.json
+- Having a Firebase connection and a firebase_conn.json https://console.firebase.google.com/.
+- Google developper password https://developers.google.com/identity/sign-in/web/sign-in?hl=es-419
 
 ## Installation
 
@@ -69,7 +70,7 @@ cp .env.example .env
 APP_BASE_URL=http://localhost:3000
 EMAIL_SERVICE=your_email_provider
 EMAIL_USER=your_email
-EMAIL_PASS=your_email_app_web_password
+EMAIL_PASS=google_developper_password
 FIREBASE_SERVICE_ACCOUNT_PATH=path_of_firebase_connection
 ```
 
