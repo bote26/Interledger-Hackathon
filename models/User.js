@@ -98,6 +98,23 @@ class User {
     const snap = await this.collection().where('account_type', '==', 'father').get();
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }
+
+  static async getWalletAddress(userId) {
+    const doc = await this.collection().doc(userId).get();
+    if (!doc.exists) return null;
+    return doc.data().wallet_address_url;
+  }
+
+  static async getIlpKey(userId) {
+    const doc = await this.collection().doc(userId).get();
+    if (!doc.exists) return null;
+    return doc.data().ilp_key_id;
+  }
+  static async getIlpPrivateKeyPath(userId) {
+    const doc = await this.collection().doc(userId).get();
+    if (!doc.exists) return null;
+    return doc.data().ilp_private_key_path;
+  }
 }
 
 module.exports = User;

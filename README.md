@@ -65,15 +65,6 @@ cp .env.example .env
 PORT=3000
 SESSION_SECRET=your-secret-key-change-in-production
 NODE_ENV=development
-APP_BASE_URL=http://localhost:3000
-EMAIL_SERVICE=Gmail
-EMAIL_USER=your.email@example.com
-EMAIL_PASS=your-app-password
-FIREBASE_SERVICE_ACCOUNT_PATH=./firebase_conn.json
-ILP_PRIVATE_KEY_PATH=./private.key
-ILP_KEY_ID=your-key-id-from-wallet-provider
-ILP_WALLET_ADDRESS_URL=https://ilp.interledger-test.dev/your_wallet
-ILP_BASE_WALLET_URL=https://ilp.interledger-test.dev
 ```
 
 ## Usage
@@ -137,7 +128,7 @@ Interledger-Hackathon/
 ## Technologies Used
 
 - **Backend**: Node.js, Express.js
-- **Database**: Firebase Firestore (via firebase-admin)
+- **Database**: SQLite (better-sqlite3)
 - **Template Engine**: EJS
 - **Authentication**: bcryptjs, express-session
 - **Frontend**: HTML, CSS, JavaScript
@@ -150,42 +141,6 @@ Interledger-Hackathon/
 - Input validation
 
 **Note**: This is a demo application. See [SECURITY.md](SECURITY.md) for production security requirements including rate limiting, HTTPS/SSL, and CSRF protection.
-
-### Firebase Setup
-
-1. Create a Firebase project and a service account with Firestore access.
-2. Download the service account JSON to the project root as `firebase_conn.json` (or set `FIREBASE_SERVICE_ACCOUNT_PATH` to its location).
-3. Ensure Firestore is in Native/GA mode and security rules allow your server access via Admin SDK.
-
-### Email Setup
-
-Set `EMAIL_USER` and `EMAIL_PASS` (e.g., Gmail App Password) and optionally `EMAIL_SERVICE`. The app sends a verification email on registration and requires email verification to log in.
-
-### Interledger Open Payments Setup
-
-This application uses the Interledger Protocol for real payments between wallet addresses.
-
-**Prerequisites:**
-1. Create wallet addresses on an Interledger test network (e.g., https://ilp.interledger-test.dev/)
-2. Generate an authentication key pair for your wallet:
-   ```bash
-   openssl genrsa -out private.key 4096
-   openssl rsa -in private.key -pubout -out public.key
-   ```
-3. Register the public key with your wallet provider and obtain a Key ID.
-
-**Configuration:**
-- `ILP_PRIVATE_KEY_PATH`: Path to your private key file (default: `./private.key`)
-- `ILP_KEY_ID`: The key ID provided by your wallet provider
-- `ILP_WALLET_ADDRESS_URL`: Your main wallet address URL (e.g., `https://ilp.interledger-test.dev/alice`)
-- `ILP_BASE_WALLET_URL`: Base URL for auto-generating user wallet addresses (optional)
-
-**Payment Flow:**
-1. When a father account initiates a transfer, the system creates an Interledger payment using the Open Payments API.
-2. The user must approve the outgoing payment grant by clicking the authorization link.
-3. After approval, the payment is completed automatically.
-
-**Note:** For testing, use the Interledger test network. For production, register with a production-grade wallet provider.
 
 ## Demo Flow
 

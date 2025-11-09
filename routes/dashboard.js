@@ -3,6 +3,9 @@ const router = express.Router();
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
+const WalletTest = require('../models/wallet_test');
+const WalletModel = require('../models/Wallet');
+const ILP = require('../services/interledgerClient');
 
 // Middleware to check if user is authenticated
 function isAuthenticated(req, res, next) {
@@ -80,10 +83,18 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
 
     const fromUser = await User.findById(from_user_id);
     const toUser = await User.findById(to_user_id);
+    
 
     if (!fromUser || !toUser) {
       return res.status(404).json({ error: 'User not found' });
     }
+    const toWallet = await User.getWalletAddress(to_user_id);
+
+    const fromWallet = await User.getWalletAddress(from_user_id);
+    console.log(`Transferring ${transferAmount} from ${fromWallet} to ${toWallet}`);
+    console.log(await User.getIlpPrivateKeyPath(from_user_id));
+
+    await WalletTest.pay(from_user_id, 'https://ilp.interledger-test.dev/alice_chapulines', transferAmount);
 
     const canAccessFrom = fromUser.id === user.id || fromUser.parent_id === user.id;
     const canAccessTo = toUser.id === user.id || toUser.parent_id === user.id;
@@ -112,16 +123,6 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
   }
 });
 
-// Complete pending transaction after grant approval
-router.post('/complete-transfer/:transactionId', isAuthenticated, async (req, res) => {
-  try {
-    const { transactionId } = req.params;
-    await Transaction.completePendingTransaction(transactionId);
-    res.json({ success: true, message: 'Transfer completed successfully' });
-  } catch (error) {
-    console.error('Complete transfer error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 module.exports = router;
+

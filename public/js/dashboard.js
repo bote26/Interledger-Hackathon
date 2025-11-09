@@ -26,37 +26,7 @@ document.getElementById('transfer-form').addEventListener('submit', async (e) =>
 
     const result = await response.json();
 
-    if (result.requiresInteraction) {
-      // ILP payment requires user to approve grant
-      showMessage('Opening authorization page...', 'info');
-      const newWindow = window.open(result.interactUrl, '_blank', 'width=600,height=800');
-      
-      // Show continue button
-      const continueBtn = document.createElement('button');
-      continueBtn.textContent = 'I have approved the payment - Click to complete';
-      continueBtn.className = 'btn btn-primary';
-      continueBtn.style.marginTop = '10px';
-      continueBtn.onclick = async () => {
-        try {
-          const completeResponse = await fetch(`/dashboard/complete-transfer/${result.transactionId}`, {
-            method: 'POST'
-          });
-          const completeResult = await completeResponse.json();
-          if (completeResponse.ok) {
-            showMessage('Transfer successful! Reloading...', 'success');
-            setTimeout(() => window.location.reload(), 1500);
-          } else {
-            showMessage(completeResult.error || 'Failed to complete transfer', 'error');
-          }
-        } catch (err) {
-          showMessage('Error completing transfer: ' + err.message, 'error');
-        }
-      };
-      document.getElementById('transfer-message').appendChild(continueBtn);
-      return;
-    }
-
-    if (response.ok && result.success) {
+    if (response.ok) {
       showMessage('Transfer successful! Reloading...', 'success');
       setTimeout(() => {
         window.location.reload();
@@ -71,9 +41,7 @@ document.getElementById('transfer-form').addEventListener('submit', async (e) =>
 
 function showMessage(message, type) {
   const messageDiv = document.getElementById('transfer-message');
-  messageDiv.innerHTML = ''; // Clear previous content
-  const textNode = document.createTextNode(message);
-  messageDiv.appendChild(textNode);
+  messageDiv.textContent = message;
   messageDiv.className = type;
   messageDiv.style.display = 'block';
 
