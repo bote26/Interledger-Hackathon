@@ -1,285 +1,167 @@
-// const Wallet = require('./Wallets');
-// const User = require('./User');
-// const { db } = require('../db/firebase');
-// const { FieldValue } = require('firebase-admin/firestore');
-// const crypto = require('crypto');
+/**
+ * Script COMPLETO para consultar TODAS las transacciones (recibidas y enviadas)
+ * Incluye flujo interactivo para outgoing payments
+ */
 
+const { isFinalizedGrant, isPendingGrant, OpenPaymentsClientError } = require('@interledger/open-payments');
+const User = require('./User');
+const Wallet = require('./Wallets');
+const readline = require('readline/promises');
+const { exec } = require('child_process');
 
-// /**
-//  * Transaction helper that queries the Open Payments provider for a user's
-//  * incoming and outgoing payments and exposes helpers to get balance info.
-//  *
-//  * Methods:
-//  * - listOutgoing(userId, { cursor, limit })
-//  * - listIncoming(userId, { cursor, limit })
-//  * - listAll(userId, options)  // returns { incoming, outgoing }
-//  * - getBalance(userId)       // attempts to read balance/asset info from walletAddress
-//  */
-// class Transactions {
-// 	static async getClientAndAddress(userId) {
-// 		const walletUrl = await User.getWalletAddress(userId);
-// 		if (!walletUrl) throw new Error(`User ${userId} has no wallet_address_url set`);
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 		const client = await Wallet.create(userId);
-// 		let walletAddress;
-// 		try {
-// 			walletAddress = await client.walletAddress.get({ url: walletUrl });
-// 		} catch (err) {
-// 			console.error('Error fetching walletAddress from provider for', { userId, walletUrl, err: err.message });
-// 			throw new Error(`Failed to fetch walletAddress for user ${userId}: ${err.message}`);
-// 		}
+const user_id = 'JiHVS1HuhMO2F79vyN5V'
 
-// 		// Validate provider response contains the endpoints we need
-// 		if (!walletAddress || !walletAddress.authServer || !walletAddress.resourceServer) {
-// 			console.error('Invalid walletAddress response', { userId, walletUrl, walletAddress });
-// 			throw new Error(`Invalid walletAddress response for user ${userId}; missing authServer or resourceServer`);
-// 		}
+// ═══════════════════════════════════════════════════════════
 
-// 		return { client, walletAddress, walletUrl };
-// 	}
+class Transaction {
+  
+  static async get_incomingPayments(userId) {
+    const client = await Wallet.create(userId);
 
-// 	static async listOutgoing(userId, opts = {}) {
-// 		// const { client, walletAddress } = await this.getClientAndAddress(userId);
-// 		// const { cursor, limit } = opts;
+    // Resolve user wallet/key getters (they're async) so we don't pass Promises
+    const WALLET_ADDRESS_URL = await User.getWalletAddress(userId);
 
-// 		// // Request a grant with list-all permission for outgoing-payment
-// 		// const outgoingPaymentListGrant = await client.grant.request(
-// 		// 	{ url: walletAddress.authServer },
-// 		// 	{
-// 		// 		access_token: {
-// 		// 			access: [
-// 		// 				{
-// 		// 					type: 'outgoing-payment',
-// 		// 					actions: ['read', 'list-all']
-// 		// 				}
-// 		// 			]
-// 		// 		}
-// 		// 	}
-// 		// );
+    const walletAddress = await client.walletAddress.get({ url: WALLET_ADDRESS_URL })
 
-// 		// const listParams = {
-// 		// 	url: walletAddress.resourceServer,
-// 		// 	accessToken: outgoingPaymentListGrant.access_token.value,
-// 		// 	walletAddress: walletAddress.id
-// 		// };
-// 		// if (cursor) listParams.cursor = cursor;
-// 		// if (limit) listParams.limit = limit;
+    const incomingGrant = await client.grant.request(
+      { url: walletAddress.authServer },
+      {
+        access_token: {
+          access: [{
+            type: 'incoming-payment',
+            actions: ['list', 'read', 'read-all']
+          }]
+        }
+      }
+    )
 
-// 		// const outgoingPayments = await client.outgoingPayment.list(listParams);
+    if (!isFinalizedGrant(incomingGrant)) {
+      throw new Error('Grant para incoming payments no finalizado')
+    }
 
-// 		// // Persist fetched outgoing payments for audit/queries
-// 		// try {
-// 		// 	if (outgoingPayments && outgoingPayments.data && outgoingPayments.data.length) {
-// 		// 		await this._persistTransactions(userId, outgoingPayments.data, 'outgoing');
-// 		// 	}
-// 		// } catch (err) {
-// 		// 	console.error('Error persisting outgoing payments:', err.message || err);
-// 		// }
-//     const outgoingPayments = 1
-// 		return outgoingPayments;
-// 	}
+    const incomingPayments = await client.incomingPayment.list({
+      url: walletAddress.resourceServer,
+      accessToken: incomingGrant.access_token.value,
+      walletAddress: walletAddress.id
+    })
 
-// 	// static async listIncoming(userId, opts = {}) {
-// 	// 	const { client, walletAddress } = await this.getClientAndAddress(userId);
-// 	// 	const { cursor, limit } = opts;
+    let totalRecibido = 0
 
-// 	// 	// Request a grant with list-all permission for incoming-payment if supported.
-// 	// 	const incomingPaymentListGrant = await client.grant.request(
-// 	// 		{ url: walletAddress.authServer },
-// 	// 		{
-// 	// 			access_token: {
-// 	// 				access: [
-// 	// 					{
-// 	// 						type: 'incoming-payment',
-// 	// 						actions: ['read', 'list-all']
-// 	// 					}
-// 	// 				]
-// 	// 			}
-// 	// 		}
-// 	// 	);
+    if (!incomingPayments || !Array.isArray(incomingPayments.result) || incomingPayments.result.length === 0) {
+      // Return an empty consistent shape when there are no incoming payments
+      return { list: [], totalRecibido: 0 };
+    } else {
 
-// 	// 	const listParams = {
-// 	// 		url: walletAddress.resourceServer,
-// 	// 		accessToken: incomingPaymentListGrant.access_token.value,
-// 	// 		walletAddress: walletAddress.id
-// 	// 	};
-// 	// 	if (cursor) listParams.cursor = cursor;
-// 	// 	if (limit) listParams.limit = limit;
+      const list = incomingPayments.result.map((pago, index) => {
+        totalRecibido += parseFloat(pago.receivedAmount.value)
 
-// 	// 	const incomingPayments = await client.incomingPayment.list(listParams);
+        return {
+          index: index + 1,
+          status: pago.completed ? 'Completed' : 'Pending',
+          amount: parseFloat(pago.receivedAmount.value) / Math.pow(10, pago.receivedAmount.assetScale),
+          assetCode: pago.receivedAmount.assetCode,
+          description: pago.metadata?.description,
+          date: new Date(pago.createdAt).toLocaleString()
+        }
+      })
 
-// 	// 	// Persist fetched incoming payments for audit/queries
-// 	// 	try {
-// 	// 		if (incomingPayments && incomingPayments.data && incomingPayments.data.length) {
-// 	// 			await this._persistTransactions(userId, incomingPayments.data, 'incoming');
-// 	// 		}
-// 	// 	} catch (err) {
-// 	// 		console.error('Error persisting incoming payments:', err.message || err);
-// 	// 	}
+      return { list, totalRecibido };
+    }
+  }
 
-// 	// 	return incomingPayments;
-// 	// }
+  static async get_outgoingPayments(userId) {
+    const client = await Wallet.create(userId);
 
-// 	// static async listAll(userId, opts = {}) {
-// 	// 	// Parallelize incoming/outgoing where possible
-// 	// 	const [incoming, outgoing] = await Promise.all([
-// 	// 		this.listIncoming(userId, opts).catch(err => {
-// 	// 			console.error('Error listing incoming payments:', err.message || err);
-// 	// 			return { data: [], pagination: null };
-// 	// 		}),
-// 	// 		this.listOutgoing(userId, opts).catch(err => {
-// 	// 			console.error('Error listing outgoing payments:', err.message || err);
-// 	// 			return { data: [], pagination: null };
-// 	// 		})
-// 	// 	]);
+    // Resolve user wallet/key getters (they're async) so we don't pass Promises
+    const WALLET_ADDRESS_URL = await User.getWalletAddress(userId);
 
-// 	// 	return { incoming, outgoing };
-// 	// }
+    const walletAddress = await client.walletAddress.get({ url: WALLET_ADDRESS_URL })
 
-// 	// static async getBalance(userId) {
-// 	// 	const { walletAddress } = await this.getClientAndAddress(userId);
+    const outgoingGrantRequest = await client.grant.request(
+      { url: walletAddress.authServer },
+      {
+        access_token: {
+          access: [{
+            type: 'outgoing-payment',
+            actions: ['list', 'list-all', 'read', 'read-all'],
+            identifier: walletAddress.id
+          }]
+        },
+        interact: {
+          start: ['redirect']
+        }
+      }
+    )
 
-// 	// 	// Many Open Payments providers include asset info on the wallet address.
-// 	// 	// Some may include a balance field; if not available, return asset info
-// 	// 	// and null balance so caller can decide how to compute/derive it.
-// 	// 	const asset = {
-// 	// 		assetCode: walletAddress.assetCode,
-// 	// 		assetScale: walletAddress.assetScale
-// 	// 	};
+  
+    if (!isPendingGrant(outgoingGrantRequest)) {
+      throw new Error('Se esperaba un grant pendiente para outgoing payments')
+    }
+    // open the interact URL in the default browser (acts like a popup)
+    const url = outgoingGrantRequest.interact.redirect;
 
-// 	// 	// Try common places for balance (may not be present depending on provider)
-// 	// 	const balance = walletAddress.balance ?? walletAddress.availableBalance ?? null;
+    const cmd =
+        process.platform === 'win32'
+            ? `start "" "${url}"`
+            : process.platform === 'darwin'
+            ? `open "${url}"`
+            : `xdg-open "${url}"`;
 
-// 	// 	return { asset, balance, raw: walletAddress };
-// 	// }
+    exec(cmd, (err) => {
+        if (err) {
+            console.error('Could not open browser. Please open this URL manually:', url);
+        } else {
+            console.log('Opened browser to approve grant:', url);
+        }
+    });
 
-// 	// /**
-// 	//  * Persist an array of transaction-like objects to Firestore under collection `transactions`.
-// 	//  * Uses each item's `id` when available to upsert, otherwise generates a document.
-// 	//  */
-// 	// static async _persistTransactions(userId, items = [], direction = 'incoming') {
-// 	// 	if (!Array.isArray(items) || items.length === 0) return;
-// 	// 	const batch = db.batch();
-// 	// 	for (const item of items) {
-// 	// 		const txId = item.id || `${direction}_${item.reference || crypto?.randomUUID?.() || Date.now()}`;
-// 	// 		const ref = db.collection('transactions').doc(txId.toString());
+    console.log('\nPlease accept grant in the browser. This script will automatically continue in 20 seconds...');
 
-// 	// 		// Extract common fields if present
-// 	// 		const status = item.status || item.state || null;
-// 	// 		const incomingAmount = item.incomingAmount || item.incoming_amount || null;
-// 	// 		const debitAmount = item.debitAmount || item.debit_amount || null;
-// 	// 		const amountObj = incomingAmount || debitAmount || item.amount || null;
-// 	// 		const amountValue = amountObj ? (amountObj.value ?? amountObj.amount ?? null) : null;
-// 	// 		const assetCode = amountObj ? (amountObj.assetCode || amountObj.currency || null) : null;
-// 	// 		const assetScale = amountObj ? (amountObj.assetScale || null) : null;
+  // Wait for 20,000 milliseconds
+  await wait(20000);
 
-// 	// 		const doc = {
-// 	// 			userId,
-// 	// 			direction,
-// 	// 			transactionId: item.id || null,
-// 	// 			status,
-// 	// 			amountRaw: amountValue ? amountValue.toString() : null,
-// 	// 			assetCode,
-// 	// 			assetScale,
-// 	// 			raw: item,
-// 	// 			updatedAt: FieldValue.serverTimestamp(),
-// 	// 		};
+  console.log('20-second wait complete. Continuing script...');
 
-// 	// 		batch.set(ref, doc, { merge: true });
-// 	// 	}
-// 	// 	await batch.commit();
-// 	// }
+    const finalizedOutgoingGrant = await client.grant.continue({
+      url: outgoingGrantRequest.continue.uri,
+      accessToken: outgoingGrantRequest.continue.access_token.value
+    })
 
-// 	// /**
-// 	//  * Compute balance from persisted transactions when provider doesn't expose balance.
-// 	//  * Returns { asset: {assetCode, assetScale}, balance: { atomic: BigInt, human: string } }
-// 	//  */
-// 	// static async getComputedBalance(userId) {
-// 	// 	// Attempt to use provider-exposed balance first
-// 	// 	const prov = await this.getBalance(userId);
-// 	// 	if (prov && prov.balance !== null && prov.balance !== undefined) {
-// 	// 		return { source: 'provider', asset: prov.asset, balance: prov.balance };
-// 	// 	}
+    if (!isFinalizedGrant(finalizedOutgoingGrant)) {
+      throw new Error('There was an error continuing the grant. You probably have not accepted the grant at the url (or it has already been used up, in which case, rerun the script).')
+    }
 
-// 	// 	// Otherwise aggregate persisted transactions
-// 	// 	const snap = await db.collection('transactions').where('userId', '==', userId).get();
-// 	// 	if (snap.empty) return { source: 'computed', asset: null, balance: null };
-
-// 	// 	let assetCode = null;
-// 	// 	let assetScale = null;
-// 	// 	let incomingSum = 0n;
-// 	// 	let outgoingSum = 0n;
-
-// 	// 	for (const d of snap.docs) {
-// 	// 		const t = d.data();
-// 	// 		if (!assetCode && t.assetCode) assetCode = t.assetCode;
-// 	// 		if (!assetScale && t.assetScale !== undefined && t.assetScale !== null) assetScale = t.assetScale;
-// 	// 		const v = t.amountRaw ? BigInt(t.amountRaw.toString()) : null;
-// 	// 		if (v !== null) {
-// 	// 			if (t.direction === 'incoming') incomingSum += v;
-// 	// 			else outgoingSum += v;
-// 	// 		}
-// 	// 	}
-
-// 	// 	const atomic = incomingSum - outgoingSum;
-// 	// 	let human = null;
-// 	// 	try {
-// 	// 		if (assetScale != null) {
-// 	// 			const scale = BigInt(10) ** BigInt(assetScale);
-// 	// 			// Convert to decimal string with scale
-// 	// 			const intPart = atomic / scale;
-// 	// 			const fracPart = (atomic < 0n ? -atomic : atomic) % scale;
-// 	// 			const fracStr = fracPart.toString().padStart(Number(assetScale), '0');
-// 	// 			human = `${intPart.toString()}.${fracStr}`;
-// 	// 		}
-// 	// 	} catch (err) {
-// 	// 		human = atomic.toString();
-// 	// 	}
-
-// 	// 	return { source: 'computed', asset: { assetCode, assetScale }, balance: { atomic, human } };
-// 	// }
+  
     
-// 	// Fast Firestore-only aggregation for dashboard use. Does not call provider.
-// 	// Returns { asset: {assetCode, assetScale}, balanceHuman: string|null, balanceAtomic: BigInt|null }
-// 	static async getCachedBalance(userId) {
-// 		const snap = await db.collection('transactions').where('userId', '==', userId).get();
-// 		if (snap.empty) return { asset: null, balanceHuman: null, balanceAtomic: null };
+    const outgoingPayments = await client.outgoingPayment.list({
+      url: walletAddress.resourceServer,
+      accessToken: finalizedOutgoingGrant.access_token.value,
+      walletAddress: walletAddress.id
+    })
 
-// 		let assetCode = null;
-// 		let assetScale = null;
-// 		let incomingSum = 0n;
-// 		let outgoingSum = 0n;
+    let totalEnviado = 0
 
-// 		for (const d of snap.docs) {
-// 			const t = d.data();
-// 			if (!assetCode && t.assetCode) assetCode = t.assetCode;
-// 			if (!assetScale && t.assetScale !== undefined && t.assetScale !== null) assetScale = t.assetScale;
-// 			const v = t.amountRaw ? BigInt(t.amountRaw.toString()) : null;
-// 			if (v !== null) {
-// 				if (t.direction === 'incoming') incomingSum += v;
-// 				else outgoingSum += v;
-// 			}
-// 		}
+    if (!outgoingPayments || !Array.isArray(outgoingPayments.result) || outgoingPayments.result.length === 0) {
+      // Return an empty consistent shape when there are no outgoing payments
+      return { list: [], totalEnviado: 0 };
+    } else {
+      const list = outgoingPayments.result.map((pago, index) => {
+        totalEnviado += parseFloat(pago.debitAmount.value)
+        return {
+          index: index + 1,
+          status: pago.failed ? 'Failed' : 'Completed',
+          amount: parseFloat(pago.debitAmount.value) / Math.pow(10, pago.debitAmount.assetScale),
+          assetCode: pago.debitAmount.assetCode,
+          description: pago.metadata?.description,
+          date: new Date(pago.createdAt).toLocaleString()
+        }
+      })
 
-// 		const atomic = incomingSum - outgoingSum;
-// 		let human = null;
-// 		if (assetScale != null) {
-// 			try {
-// 				const scale = BigInt(10) ** BigInt(assetScale);
-// 				const intPart = atomic / scale;
-// 				const fracPart = (atomic < 0n ? -atomic : atomic) % scale;
-// 				const fracStr = fracPart.toString().padStart(Number(assetScale), '0');
-// 				human = `${intPart.toString()}.${fracStr}`;
-// 			} catch (err) {
-// 				human = atomic.toString();
-// 			}
-// 		} else {
-// 			human = atomic.toString();
-// 		}
+      return { list, totalEnviado };
+    }
+    }
+}
 
-// 		return { asset: { assetCode, assetScale }, balanceHuman: human, balanceAtomic: atomic };
-// 	}
-
-// }
-
-// module.exports = Transactions;
+module.exports = Transaction;

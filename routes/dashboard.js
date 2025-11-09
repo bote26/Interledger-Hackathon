@@ -4,6 +4,7 @@ const User = require('../models/User');
 // const Transaction = require('../models/Transaction');
 const Wallet = require('../models/Wallets');
 const { db } = require('../db/firebase');
+const Transaction = require('../models/Transaction');
 
 
 // Middleware to check if user is authenticated
@@ -59,7 +60,19 @@ router.get('/', isAuthenticated, async (req, res) => {
     }
 
     if (user.account_type === 'father') {
-      const children = await User.getChildren(user.id);
+      const childrenRaw = await User.getChildren(user.id);
+      // Normalize childrenRaw into an array. Some implementations may return a
+      // Firestore QuerySnapshot or an object; ensure we have an array to iterate.
+      let children = [];
+      if (Array.isArray(childrenRaw)) {
+        children = childrenRaw;
+      } else if (childrenRaw && Array.isArray(childrenRaw.docs)) {
+        children = childrenRaw.docs.map(d => ({ id: d.id, ...d.data() }));
+      } else if (childrenRaw && typeof childrenRaw === 'object') {
+        // If it's an object keyed by id, convert to array
+        children = Object.keys(childrenRaw).map(k => ({ id: k, ...(childrenRaw[k] || {}) }));
+      }
+
       const childrenWithWallets = await Promise.all(children.map(async child => {
         const childWalletAddress = await User.getWalletAddress(child.id);
         const childWallet = { id: childWalletAddress || null, wallet_address_url: childWalletAddress || null, balance: 0 };
@@ -128,6 +141,14 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
     if (!canAccessFrom || !canAccessTo) {
       return res.status(403).json({ error: 'You do not have permission to perform this transfer' });
     }
+
+    res.json({ success: true, message: 'Transfer completed successfully' });
+
+    const {list: l_1, totalRecibido: b1} = await Transaction.get_incomingPayments(user.id);
+    const {list: l_2, totalEnviado: b2} = await Transaction.get_outgoingPayments(user.id);
+    console.log('Incoming Payments:', l_1, 'Balance:', b1);
+    console.log('Outgoing Payments:', l_2, 'Balance:', b2);
+    console.log('Total balance:', b1 - b2);
 
   //   // Create ILP transaction (returns interactive grant URL if needed)
   //   const result = await Transaction.create(fromUser.id, toUser.id, transferAmount, description);
