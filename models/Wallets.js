@@ -1,6 +1,6 @@
 const { createAuthenticatedClient, OpenPaymentsClientError, isFinalizedGrant } = require('@interledger/open-payments');
 const path = require('path');
-const User = require('../models/User');
+const User = require('./User');
 
 const readline = require('readline/promises');
 
@@ -260,6 +260,12 @@ console.error('a')
 
 //   process.exit()
     }
+  static async request(fromUserId, toWalletAddressUrl, amount){
+        // Implementation for requesting money can go here
+
+        
+    }
+
 
 }
 

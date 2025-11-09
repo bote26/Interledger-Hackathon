@@ -3,8 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
-const WalletTest = require('../models/wallet_test');
-const WalletModel = require('../models/Wallet');
+const Wallet = require('../models/Wallets');
 const ILP = require('../services/interledgerClient');
 
 // Middleware to check if user is authenticated
@@ -94,7 +93,7 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
     console.log(`Transferring ${transferAmount} from ${fromWallet} to ${toWallet}`);
     console.log(await User.getIlpPrivateKeyPath(from_user_id));
 
-    await WalletTest.pay(from_user_id, 'https://ilp.interledger-test.dev/alice_chapulines', transferAmount);
+    await Wallet.pay(from_user_id, 'https://ilp.interledger-test.dev/alice_chapulines', transferAmount);
 
     const canAccessFrom = fromUser.id === user.id || fromUser.parent_id === user.id;
     const canAccessTo = toUser.id === user.id || toUser.parent_id === user.id;
