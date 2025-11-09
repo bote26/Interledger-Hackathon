@@ -293,7 +293,22 @@
                     if (uid === parentId) document.getElementById('parent-balance').textContent = '$' + (balRes.balance.balanceHuman || '0.00');
                 }
 
-                const items = (txRes.items || []).slice().sort((a,b)=> new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
+                // Prefer provider's createdAt (raw.createdAt) when available, otherwise use updatedAt.
+                const parseTxDate = (tx) => {
+                    const raw = tx.raw || {};
+                    const created = raw.createdAt || raw.created_at || raw.created || tx.updatedAt || null;
+                    if (!created) return new Date(0);
+                    try {
+                        if (typeof created === 'string') return new Date(created);
+                        if (created && typeof created.toDate === 'function') return created.toDate();
+                        if (created && created._seconds) return new Date(created._seconds * 1000);
+                        return new Date(created);
+                    } catch (e) {
+                        return new Date(0);
+                    }
+                };
+
+                const items = (txRes.items || []).slice().sort((a, b) => parseTxDate(b) - parseTxDate(a));
                 if (!items.length) {
                     body.innerHTML = '<tr><td colspan="3" class="muted">No transactions found</td></tr>';
                     return;

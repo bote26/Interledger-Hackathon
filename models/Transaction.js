@@ -279,6 +279,98 @@ class Transaction {
       }
   }
 
+  /**
+   * Persist provider-returned items only if the provider doc doesn't already exist.
+   * This avoids double-counting balances when the sync later re-runs.
+   */
+  static async persistProviderItemsIfNotExists(userId, items = [], direction = 'incoming') {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const batch = db.batch();
+    let batchSum = 0n;
+
+    for (const item of items) {
+      // derive same txId logic as _persistTransactions
+      let txId;
+      if (item.id && typeof item.id === 'string' && !item.id.includes('/')) {
+        txId = item.id;
+      } else if (item.id) {
+        try {
+          const h = crypto.createHash('sha256').update(String(item.id)).digest('hex');
+          txId = `${direction}_${h}`;
+        } catch (e) {
+          txId = `${direction}_${crypto.randomUUID()}`;
+        }
+      } else {
+        txId = `${direction}_${crypto.randomUUID()}`;
+      }
+
+      const ref = db.collection('transactions').doc(String(txId));
+      // if the doc already exists, skip it
+      const snap = await ref.get();
+      if (snap.exists) {
+        // already persisted; skip
+        continue;
+      }
+
+      const status = item.status || item.state || null;
+      const incomingAmount = item.incomingAmount || item.incoming_amount || item.receivedAmount || item.received_amount || null;
+      const debitAmount = item.debitAmount || item.debit_amount || null;
+      const amountObj = incomingAmount || debitAmount || item.amount || null;
+      const amountValue = amountObj ? (amountObj.value ?? amountObj.amount ?? amountObj.amountAtomic ?? null) : null;
+      const assetCode = amountObj ? (amountObj.assetCode || amountObj.currency || amountObj.asset || null) : null;
+      const assetScale = amountObj ? (amountObj.assetScale ?? amountObj.scale ?? null) : null;
+
+      const atomicStr = amountValue ? String(amountValue) : null;
+      const computedAmountHuman = (atomicStr && assetScale != null) ?
+        Transaction.atomicToHumanString(atomicStr, Number(assetScale)) : (atomicStr || null);
+
+      const doc = {
+        userId,
+        direction,
+        transactionId: item.id || null,
+        status,
+        amountAtomic: amountValue ? amountValue.toString() : null,
+        amountHuman: computedAmountHuman,
+        assetCode,
+        assetScale,
+        raw: item,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+
+      batch.set(ref, doc, { merge: true });
+
+      if (amountValue) {
+        try {
+          batchSum += BigInt(amountValue.toString());
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    // commit if we added anything
+    try {
+      await batch.commit();
+      if (batchSum !== 0n) {
+        const delta = direction === 'incoming' ? batchSum : -batchSum;
+        // pick assetCode/assetScale from first item that had it
+        let assetCode = null;
+        let assetScale = null;
+        for (const it of items) {
+          const amt = it.incomingAmount || it.incoming_amount || it.debitAmount || it.debit_amount || it.amount || null;
+          if (amt) {
+            assetCode = assetCode || (amt.assetCode || amt.currency || null);
+            assetScale = assetScale ?? (amt.assetScale ?? null);
+          }
+        }
+        await this._updateBalance(userId, delta, assetCode, assetScale);
+      }
+    } catch (err) {
+      console.error('[Transaction.persistProviderItemsIfNotExists] commit failed', err && err.message ? err.message : err);
+      throw err;
+    }
+  }
+
     // Update per-user cached balance atomically. balanceAtomic saved as string.
     static async _updateBalance(userId, deltaAtomic, assetCode = null, assetScale = null) {
       const ref = db.collection('balances').doc(String(userId));
@@ -493,7 +585,7 @@ class Transaction {
         let total = 0n;
         let assetCode = null;
         let assetScale = null;
-        for (const d of q.docs) {
+        for (const  d of q.docs) {
           const t = d.data();
           if (t && t.amountAtomic) {
             try {

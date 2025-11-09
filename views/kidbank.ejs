@@ -1943,13 +1943,22 @@
                     }
                 }
 
-                const allTransactions = (txRes.items || []).slice();
-                // Ensure updatedAt is a Date-friendly string if it was serialized
-                allTransactions.sort((a, b) => {
-                    const dateA = new Date(a.updatedAt || 0);
-                    const dateB = new Date(b.updatedAt || 0);
-                    return dateB - dateA;
-                });
+                // Parse transaction timestamp (prefer provider raw.createdAt when available)
+                const parseTxDate = (tx) => {
+                    const raw = tx.raw || {};
+                    const created = raw.createdAt || raw.created_at || raw.created || tx.updatedAt || null;
+                    if (!created) return new Date(0);
+                    try {
+                        if (typeof created === 'string') return new Date(created);
+                        if (created && typeof created.toDate === 'function') return created.toDate();
+                        if (created && created._seconds) return new Date(created._seconds * 1000);
+                        return new Date(created);
+                    } catch (e) {
+                        return new Date(0);
+                    }
+                };
+
+                const allTransactions = (txRes.items || []).slice().sort((a, b) => parseTxDate(b) - parseTxDate(a));
 
                 // Render preview (last 3)
                 renderTransactionPreview(allTransactions.slice(0, 3));

@@ -160,15 +160,9 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
       console.debug('Wallet.pay result', { payResult });
     } catch (err) {
       console.error('Provider payment failed:', err && err.message ? err.message : err);
-      // If provider payment failed, we *could* fall back to recording a local transfer.
-      // However the user prefers avoiding local entries when possible; return error so
-      // the caller can retry or inspect logs. If you prefer a fallback, we can record
-      // a local transfer here instead.
       return res.status(500).json({ error: 'Provider payment failed: ' + (err && err.message ? err.message : String(err)) });
     }
 
-    // If provider returned payment objects (incoming/outgoing), do NOT create a local transfer
-    // because provider-backed transactions will be synced into Firestore by the sync flow.
     const providerHasRecorded = payResult && (payResult.incomingPayment || payResult.outgoingPayment);
     if (!providerHasRecorded) {
       try {
@@ -181,6 +175,17 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
       }
     } else {
       console.log('Provider created payment; skipping local record for transfer between', from_user_id, '->', to_user_id);
+      // Persist provider items for immediate visibility to both parties (only if not already persisted)
+      try {
+        if (payResult.incomingPayment) {
+          await Transaction.persistProviderItemsIfNotExists(to_user_id, [payResult.incomingPayment], 'incoming');
+        }
+        if (payResult.outgoingPayment) {
+          await Transaction.persistProviderItemsIfNotExists(from_user_id, [payResult.outgoingPayment], 'outgoing');
+        }
+      } catch (e) {
+        console.warn('Failed to persist provider items immediately after pay:', e && e.message ? e.message : e);
+      }
     }
 
     return res.json({ success: true, message: 'Transfer completed successfully' });

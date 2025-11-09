@@ -74,7 +74,22 @@
             <label for="address">Address:</label>
             <textarea id="address" name="address" rows="3" required></textarea>
           </div>
+
+          <div class="form-group">
+            <label for="walletAddressUrl">Wallet Address:</label>
+            <textarea id="text" name="walletAddressUrl"  required></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="ilp_key_id">Your ilp_key_id:</label>
+            <input type="text" id="ilp_key_id" name="ilp_key_id" required>
         </div>
+
+      <div class="form-group">
+        <label for="ilp_private_key">Your Private Key (file upload):</label>
+        <input type="file" id="ilp_private_key" name="ilp_private_key" accept=".pem,.key,text/plain">
+        <small>If you have a PEM/private key file, upload it here. The server will store it under the <code>secrets/</code> folder.</small>
+      </div>
 
         <button type="submit" class="btn btn-primary">Register</button>
       </form>

@@ -2,7 +2,6 @@ const { createAuthenticatedClient, OpenPaymentsClientError, isFinalizedGrant } =
 const path = require('path');
 const fs = require('fs');
 const User = require('./User');
-const Transaction = require('./Transaction');
 
 const { exec } = require('child_process');
 
@@ -104,12 +103,8 @@ class Wallet {
     incomingPaymentGrant
   })
   
-  // Step 3: Create the incoming payment. This will be where funds will be received.
 
-    // Convert the provided human amount into atomic units according to the
-    // receiving wallet's assetScale. The provider expects atomic integer values
-    // (smallest currency unit), so sending `100` with assetScale=2 should become `10000`.
-    const atomicAmount = Transaction.humanToAtomic(amount, receivingWalletAddress.assetScale);
+  // Step 3: Create the incoming payment. This will be where funds will be received.
 
     const incomingPayment = await client.incomingPayment.create(
       {
@@ -122,7 +117,7 @@ class Wallet {
           assetCode: receivingWalletAddress.assetCode,
           assetScale: receivingWalletAddress.assetScale,
           // send atomic integer string
-          value: atomicAmount.toString()
+          value: amount.toString()
         },
       expiresAt: new Date(Date.now() + 60_000 * 10 ).toISOString() // 1 hour from now
     }
