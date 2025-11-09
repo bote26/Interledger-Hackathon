@@ -7,7 +7,6 @@ const WalletTest = require('../models/wallet_test');
 const WalletModel = require('../models/Wallet');
 const ILP = require('../services/interledgerClient');
 
-// Middleware to check if user is authenticated
 function isAuthenticated(req, res, next) {
   if (req.session.userId) {
     return next();
@@ -15,12 +14,12 @@ function isAuthenticated(req, res, next) {
   res.redirect('/auth/login');
 }
 
-// Dashboard
+// RUTA 1: Dashboard original
 router.get('/', isAuthenticated, async (req, res) => {
   try {
     const user = await User.findById(req.session.userId);
     if (!user) return res.status(404).send('User not found');
-    // Ensure we always pass a wallet object with a numeric balance to the views
+    
     let wallet = await Wallet.findByUserId(user.id);
     if (!wallet) {
       wallet = { id: null, wallet_address_url: null, balance: 0 };
@@ -29,7 +28,18 @@ router.get('/', isAuthenticated, async (req, res) => {
       wallet.balance = typeof bal === 'number' ? bal : 0;
     }
 
+    // Get all transactions for this wallet
     const transactions = wallet.id ? await Transaction.getByWalletId(wallet.id) : [];
+    
+    // Format transactions for display
+    const formattedTransactions = transactions.map(t => ({
+      name: t.description || 'Transaction',
+      date: new Date(t.timestamp).toLocaleDateString(),
+      amount: t.amount.toFixed(2),
+      type: t.to_user_id === user.id ? 'received' : 'sent',
+      icon: t.to_user_id === user.id ? '🪙' : '💸',
+      iconBg: t.to_user_id === user.id ? '#22c55e' : '#ea580c'
+    }));
 
     if (user.account_type === 'father') {
       const children = await User.getChildren(user.id);
@@ -65,11 +75,85 @@ router.get('/', isAuthenticated, async (req, res) => {
   }
 });
 
-// Transfer money (for father accounts)
+// RUTA 2: KIDBANK - NUEVA
+router.get('/kidbank', isAuthenticated, async (req, res) => {
+  try {
+    console.log('✅ KidBank route hit!'); // DEBUG
+    
+    const user = await User.findById(req.session.userId);
+    if (!user) return res.status(404).send('User not found');
+
+    // Only allow children to access KidBank
+    if (user.account_type !== 'child') {
+      return res.redirect('/dashboard');
+    }
+
+    let wallet = await Wallet.findByUserId(user.id);
+    if (!wallet) {
+      wallet = { id: null, wallet_address_url: null, balance: 0 };
+    } else {
+      const bal = await Wallet.getBalance(wallet.id);
+      wallet.balance = typeof bal === 'number' ? bal : 0;
+    }
+
+    const allTransactions = wallet.id ? await Transaction.getByWalletId(wallet.id) : [];
+    
+    // Prepare example data for the dashboard
+    const mockData = {
+      userName: user.full_name || user.name || 'User',
+      userStars: 245,
+      userBalance: wallet.balance || 0,
+      monthGain: 23.50,
+      transactions: [
+        {
+          name: "Weekly Allowance",
+          date: "Today",
+          amount: "10.00",
+          type: "received",
+          icon: "🪙",
+          iconBg: "#22c55e"
+        }
+      ],
+      savingsGoals: [
+        {
+          name: "New Video Game",
+          icon: "🎮",
+          color: "linear-gradient(135deg, #3b82f6, #06b6d4)",
+          saved: 45,
+          target: 60
+        }
+      ],
+      tasks: [
+        {
+          id: "task-1",
+          name: "Clean my room",
+          icon: "🏠",
+          color: "linear-gradient(135deg, #fbbf24, #f59e0b)",
+          reward: 5,
+          stars: 10,
+          completed: false
+        }
+      ],
+      investmentBalance: 85.75,
+      investmentEarnings: 5.75,
+      gameLevel: 12,
+      totalCoins: 1250,
+      achievementsUnlocked: 8,
+      dayStreak: 5
+    };
+
+    // Render the dashboard with the mock data
+    res.render('kidbank-dashboard', mockData);
+  } catch (error) {
+    console.error('KidBank error:', error);
+    res.status(500).send('Error loading KidBank: ' + error.message);
+  }
+});
+
+// RUTA 3: Transfer (original)
 router.post('/transfer', isAuthenticated, async (req, res) => {
   try {
     const user = await User.findById(req.session.userId);
-
     if (user.account_type !== 'father') {
       return res.status(403).json({ error: 'Only father accounts can transfer money' });
     }
@@ -103,7 +187,6 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
       return res.status(403).json({ error: 'You do not have permission to perform this transfer' });
     }
 
-    // Create ILP transaction (returns interactive grant URL if needed)
     const result = await Transaction.create(fromUser.id, toUser.id, transferAmount, description);
 
     if (result.requiresInteraction) {
