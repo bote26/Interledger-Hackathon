@@ -2,12 +2,8 @@ const { createAuthenticatedClient, OpenPaymentsClientError, isFinalizedGrant } =
 const path = require('path');
 const fs = require('fs');
 const User = require('./User');
+const Transaction = require('./Transaction');
 
-const readline = require('readline/promises');
-
-const { db } = require('../db/firebase');
-const { FieldValue } = require('firebase-admin/firestore');
-const { send } = require('process');
 const { exec } = require('child_process');
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -23,37 +19,44 @@ class Wallet {
             throw new Error('User does not have a wallet address URL set');
         }
 
-        // Resolve async getters (they may return promises)
-        const walletAddressUrl = await User.getWalletAddress(userId);
-        const keyId = await User.getIlpKey(userId);
-        let privateKeyOrPath = await User.getIlpPrivateKeyPath(userId);
+    // Resolve async getters so we pass actual strings (not Promises) to the client
+    const walletAddressUrl = await User.getWalletAddress(userId);
+    if (!walletAddressUrl) throw new Error('User wallet address URL is empty');
+    const keyId = await User.getIlpKey(userId);
+    const privateKeyValue = await User.getIlpPrivateKeyPath(userId);
 
-        // If the user object already included the path, prefer it
-        if (!privateKeyOrPath && user.ilp_private_key_path) {
-          privateKeyOrPath = user.ilp_private_key_path;
+    // The stored value may be either the PEM content or a filesystem path to the PEM.
+    // If it's a path, read the file to obtain the PEM string before passing to the client.
+    let privateKeyMaterial = undefined;
+    if (privateKeyValue) {
+      if (typeof privateKeyValue !== 'string') {
+        // defensive: coerce to string
+        privateKeyValue = String(privateKeyValue);
+      }
+
+      if (privateKeyValue.includes('-----BEGIN')) {
+        // Looks like PEM content already
+        privateKeyMaterial = privateKeyValue;
+      } else {
+        // Treat as path. Resolve relative paths against project cwd.
+        const resolved = path.isAbsolute(privateKeyValue)
+          ? privateKeyValue
+          : path.join(process.cwd(), privateKeyValue);
+        try {
+          privateKeyMaterial = await fs.promises.readFile(resolved, 'utf8');
+        } catch (err) {
+          throw new Error(`Could not load private key at ${resolved}: ${err.message}`);
         }
+      }
+    }
 
-        // Resolve private key material: if it's a path, read the PEM contents
-        let privateKeyMaterial = privateKeyOrPath;
-        if (typeof privateKeyOrPath === 'string' && !privateKeyOrPath.includes('-----BEGIN')) {
-          try {
-            if (fs.existsSync(privateKeyOrPath)) {
-              privateKeyMaterial = fs.readFileSync(privateKeyOrPath, 'utf8');
-            } else {
-              // leave as-is; the client may accept paths or raw PEM
-              privateKeyMaterial = privateKeyOrPath;
-            }
-          } catch (err) {
-            console.error('Error reading ILP private key file:', err.message || err);
-          }
-        }
+    const client = await createAuthenticatedClient({
+      walletAddressUrl,
+      keyId,
+      privateKey: privateKeyMaterial,
+    });
 
-        const client = await createAuthenticatedClient({
-            walletAddressUrl,
-            keyId,
-            privateKey: privateKeyMaterial,
-        })
-        return client;
+    return client;
     }
 
     /**
@@ -103,6 +106,11 @@ class Wallet {
   
   // Step 3: Create the incoming payment. This will be where funds will be received.
 
+    // Convert the provided human amount into atomic units according to the
+    // receiving wallet's assetScale. The provider expects atomic integer values
+    // (smallest currency unit), so sending `100` with assetScale=2 should become `10000`.
+    const atomicAmount = Transaction.humanToAtomic(amount, receivingWalletAddress.assetScale);
+
     const incomingPayment = await client.incomingPayment.create(
       {
         url: receivingWalletAddress.resourceServer,
@@ -110,11 +118,12 @@ class Wallet {
       },
     {
       walletAddress: receivingWalletAddress.id,
-      incomingAmount: {
-        assetCode: receivingWalletAddress.assetCode,
-        assetScale: receivingWalletAddress.assetScale,
-        value: amount.toString()
-      },
+        incomingAmount: {
+          assetCode: receivingWalletAddress.assetCode,
+          assetScale: receivingWalletAddress.assetScale,
+          // send atomic integer string
+          value: atomicAmount.toString()
+        },
       expiresAt: new Date(Date.now() + 60_000 * 10 ).toISOString() // 1 hour from now
     }
   );
@@ -282,15 +291,9 @@ console.error('a')
     '\nStep 7: Created outgoing payment. Funds will now move from the outgoing payment to the incoming payment.',
     outgoingPayment
   )
-
-//   process.exit()
+  // Return provider artifacts so callers can decide whether to record local transfers
+  return { incomingPayment, outgoingPayment };
     }
-  static async request(fromUserId, toWalletAddressUrl, amount){
-        // Implementation for requesting money can go here
-
-
-    }
-
 
 }
 

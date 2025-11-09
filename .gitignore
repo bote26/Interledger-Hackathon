@@ -4,3 +4,4 @@ node_modules/
 .DS_Store
 firebase_conn.json/
 .vscode/
+firebase_conn.json
