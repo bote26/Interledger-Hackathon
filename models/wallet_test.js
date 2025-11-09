@@ -2,6 +2,8 @@ const { createAuthenticatedClient, OpenPaymentsClientError, isFinalizedGrant } =
 const path = require('path');
 const User = require('../models/User');
 
+const readline = require('readline/promises');
+
 const { db } = require('../db/firebase');
 const { FieldValue } = require('firebase-admin/firestore');
 const { send } = require('process');
@@ -21,7 +23,7 @@ class Wallet {
         const client = await createAuthenticatedClient({
             walletAddressUrl: user.wallet_address_url,
             keyId: user.ilp_key_id,
-            privateKey: user.ilp_private_key_path
+            privateKey: user.ilp_private_key_path,
         })
         return client;
     }
@@ -37,87 +39,223 @@ class Wallet {
      */
     static async pay(fromUserId, toWalletAddressUrl, amount){
         if (amount <= 0) throw new Error('Amount must be positive');
-
-
-        // Receiver: resolve wallet by wallet id and create client using the wallet's owner credentials
-        const toWallet = toWalletAddressUrl;
-        if (!toWallet) throw new Error('Target wallet not found');
         
-        const receiverClient = await this.create(receiverUserId);
-        const receiverWalletUrl = toWallet.wallet_address_url;
-        const receiverWalletAddress = await receiverClient.walletAddress.get({ url: receiverWalletUrl });
+        console.log(await User.getIlpPrivateKeyPath(fromUserId))
 
-        const incomingGrant = await receiverClient.grant.request(
-            { url: receiverWalletAddress.authServer },
-            { access_token: { access: [ { type: 'incoming-payment', actions: ['read','complete','create'] } ] } }
-        );
+        const client = await createAuthenticatedClient({
+            walletAddressUrl: await User.getWalletAddress(fromUserId),
+            keyId: await User.getIlpKey(fromUserId),
+            privateKey: await User.getIlpPrivateKeyPath(fromUserId)
+        })
 
-        if (!isFinalizedGrant(incomingGrant)) throw new Error('Failed to obtain incoming payment grant for receiver');
-
-        const incomingPayment = await receiverClient.incomingPayment.create(
-            { url: receiverWalletAddress.resourceServer, accessToken: incomingGrant.access_token.value },
-            { walletAddress: receiverWalletAddress.id, incomingAmount: { assetCode: receiverWalletAddress.assetCode, assetScale: receiverWalletAddress.assetScale, value: amount.toString() } }
-        );
-
-        // Sender: create quote
-        const senderClient = await this.create(fromUserId);
-        const senderUser = await User.findById(fromUserId);
-        const senderWalletUrl = senderUser.wallet_address_url;
-        const senderWalletAddress = await senderClient.walletAddress.get({ url: senderWalletUrl });
-
-        const quoteGrant = await senderClient.grant.request(
-            { url: senderWalletAddress.authServer },
-            { access_token: { access: [ { type: 'quote', actions: ['create','read'] } ] } }
-        );
-
-        if (!isFinalizedGrant(quoteGrant)) throw new Error('Failed to obtain quote grant for sender');
-
-        const quote = await senderClient.quote.create(
-            { url: senderWalletAddress.resourceServer, accessToken: quoteGrant.access_token.value },
-            { walletAddress: senderWalletAddress.id, receiver: incomingPayment.id, method: 'ilp' }
-        );
-
-        // Request outgoing (interactive) grant
-        const outgoingGrant = await senderClient.grant.request(
-            { url: senderWalletAddress.authServer },
+        const SENDING_WALLET_ADDRESS_URL = await User.getWalletAddress(fromUserId)
+        const RECEIVING_WALLET_ADDRESS_URL = toWalletAddressUrl
+        console.log(toWalletAddressUrl)
+        
+        const sendingWalletAddress = await client.walletAddress.get({
+            url: SENDING_WALLET_ADDRESS_URL
+        })
+        const receivingWalletAddress = await client.walletAddress.get({
+            url: RECEIVING_WALLET_ADDRESS_URL
+        })
+        console.log('\nStep 1: got sending and receiving wallet addresses', {
+            sendingWalletAddress,
+            receivingWalletAddress
+        })
+        const incomingPaymentGrant = await client.grant.request(
+            {
+                url: receivingWalletAddress.authServer
+            },
             {
                 access_token: {
                     access: [
-                        { type: 'outgoing-payment', actions: ['read','create'], limits: { debitAmount: quote.debitAmount }, identifier: senderWalletAddress.id }
+                    {
+                        type: 'incoming-payment',
+                        actions: ['read', 'complete', 'create']
+                    }
                     ]
-                },
-                interact: { start: ['redirect'] }
-            }
-        );
+                }
+                }
+            )
+        if (!isFinalizedGrant(incomingPaymentGrant)) {
+          throw new Error('Expected finalized incoming payment grant')
+        }
+    console.log('\nStep 2: got incoming payment grant on receiving wallet address', {
+    incomingPaymentGrant
+  })
+    console.log(incomingPaymentGrant.continue.access_token)
+    console.log(incomingPaymentGrant.access_token.access)
 
-        return {
-            interactUrl: outgoingGrant.interact?.redirect,
-            continueUri: outgoingGrant.continue?.uri,
-            continueToken: outgoingGrant.continue?.access_token?.value,
-            incomingPaymentId: incomingPayment.id,
-            quoteId: quote.id
-        };
+    console.log("---")
+    console.log(receivingWalletAddress.resourceServer)
+    console.log(incomingPaymentGrant.continue.access_token.value)
+    console.log(receivingWalletAddress.id)
+    console.log(receivingWalletAddress.assetCode)
+    console.log(receivingWalletAddress.assetScale)
+
+  
+
+  // Step 3: Create the incoming payment. This will be where funds will be received.
+
+    const incomingPayment = await client.incomingPayment.create(
+      {
+        url: receivingWalletAddress.resourceServer,
+        accessToken: incomingPaymentGrant.access_token.value
+      },
+    {
+      walletAddress: receivingWalletAddress.id,
+      incomingAmount: {
+        assetCode: receivingWalletAddress.assetCode,
+        assetScale: receivingWalletAddress.assetScale,
+        value: '1000'
+      },
+      expiresAt: new Date(Date.now() + 60_000 * 10 ).toISOString() // 1 hour from now
+    }
+  );
+
+  console.log(
+    '\nStep 3: created incoming payment on receiving wallet address',
+    incomingPayment
+  )
+
+  // Step 4: Get a quote grant, so we can create a quote on the sending wallet address
+  const quoteGrant = await client.grant.request(
+    {
+      url: sendingWalletAddress.authServer
+    },
+    {
+      access_token: {
+        access: [
+          {
+            type: 'quote',
+            actions: ['create', 'read']
+          }
+        ]
+      }
+    }
+  )
+
+  if (!isFinalizedGrant(quoteGrant)) {
+    throw new Error('Expected finalized quote grant')
+  }
+
+  console.log('\nStep 4: got quote grant on sending wallet address', quoteGrant)
+
+  // Step 5: Create a quote, this gives an indication of how much it will cost to pay into the incoming payment
+  const quote = await client.quote.create(
+    {
+      url: sendingWalletAddress.resourceServer,
+      accessToken: quoteGrant.access_token.value
+    },
+    {
+      walletAddress: sendingWalletAddress.id,
+      receiver: incomingPayment.id,
+      method: 'ilp'
+    }
+  )
+
+  console.log('\nStep 5: got quote on sending wallet address', quote)
+
+  // Step 7: Start the grant process for the outgoing payments.
+  // This is an interactive grant: the user (in this case, you) will need to accept the grant by navigating to the outputted link.
+  const outgoingPaymentGrant = await client.grant.request(
+    {
+      url: sendingWalletAddress.authServer
+    },
+    {
+      access_token: {
+        access: [
+          {
+            type: 'outgoing-payment',
+            actions: ['read', 'create'],
+            limits: {
+              debitAmount: {
+                assetCode: quote.debitAmount.assetCode,
+                assetScale: quote.debitAmount.assetScale,
+                value: quote.debitAmount.value
+              }
+            },
+            identifier: sendingWalletAddress.id
+          }
+        ]
+      },
+      interact: {
+        start: ['redirect']
+        // finish: {
+        //   method: "redirect",
+        //   // This is where you can (optionally) redirect a user to after going through interaction.
+        //   // Keep in mind, you will need to parse the interact_ref in the resulting interaction URL,
+        //   // and pass it into the grant continuation request.
+        //   uri: "https://example.com",
+        //   nonce: crypto.randomUUID(),
+        // },
+      }
+    }
+  )
+
+  console.log(
+    '\nStep 7: got pending outgoing payment grant',
+    outgoingPaymentGrant
+  )
+  console.log(
+    'Please navigate to the following URL, to accept the interaction from the sending wallet:'
+  )
+  console.log(outgoingPaymentGrant.interact.redirect)
+
+  await readline
+    .createInterface({ input: process.stdin, output: process.stdout })
+    .question('\nPlease accept grant and press enter...')
+
+  let finalizedOutgoingPaymentGrant
+
+  const grantContinuationErrorMessage =
+    '\nThere was an error continuing the grant. You probably have not accepted the grant at the url (or it has already been used up, in which case, rerun the script).'
+
+  try {
+    finalizedOutgoingPaymentGrant = await client.grant.continue({
+      url: outgoingPaymentGrant.continue.uri,
+      accessToken: outgoingPaymentGrant.continue.access_token.value
+    })
+  } catch (err) {
+    if (err instanceof OpenPaymentsClientError) {
+      console.log(grantContinuationErrorMessage)
+      process.exit()
     }
 
-    /**
-     * Complete an interactive payment after the user has approved the grant (by visiting interactUrl).
-     * Returns the outgoing payment resource.
-     */
-    static async completePayment(fromUserId, continueUri, continueToken, quoteId){
-        const senderClient = await this.create(fromUserId);
-        const senderUser = await User.findById(fromUserId);
-        const senderWalletUrl = senderUser.wallet_address_url;
-        const senderWalletAddress = await senderClient.walletAddress.get({ url: senderWalletUrl });
+    throw err
+  }
 
-        const finalizedGrant = await senderClient.grant.continue({ url: continueUri, accessToken: continueToken });
-        if (!isFinalizedGrant(finalizedGrant)) throw new Error('Grant not finalized/approved');
+  if (!isFinalizedGrant(finalizedOutgoingPaymentGrant)) {
+    console.log(
+      'There was an error continuing the grant. You probably have not accepted the grant at the url.'
+    )
+    process.exit()
+  }
 
-        const outgoingPayment = await senderClient.outgoingPayment.create(
-            { url: senderWalletAddress.resourceServer, accessToken: finalizedGrant.access_token.value },
-            { walletAddress: senderWalletAddress.id, quoteId }
-        );
+  console.log(
+    '\nStep 6: got finalized outgoing payment grant',
+    finalizedOutgoingPaymentGrant
+  )
 
-        return outgoingPayment;
+  // Step 7: Finally, create the outgoing payment on the sending wallet address.
+  // This will make a payment from the outgoing payment to the incoming one (over ILP)
+  const outgoingPayment = await client.outgoingPayment.create(
+    {
+      url: sendingWalletAddress.resourceServer,
+      accessToken: finalizedOutgoingPaymentGrant.access_token.value
+    },
+    {
+      walletAddress: sendingWalletAddress.id,
+      quoteId: quote.id
+    }
+  )
+
+  console.log(
+    '\nStep 7: Created outgoing payment. Funds will now move from the outgoing payment to the incoming payment.',
+    outgoingPayment
+  )
+
+  process.exit()
     }
 
     

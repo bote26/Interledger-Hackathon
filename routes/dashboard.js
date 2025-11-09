@@ -3,6 +3,9 @@ const router = express.Router();
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
+const WalletTest = require('../models/wallet_test');
+const WalletModel = require('../models/Wallet');
+const ILP = require('../services/interledgerClient');
 
 function isAuthenticated(req, res, next) {
   if (req.session.userId) {
@@ -164,10 +167,18 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
 
     const fromUser = await User.findById(from_user_id);
     const toUser = await User.findById(to_user_id);
+    
 
     if (!fromUser || !toUser) {
       return res.status(404).json({ error: 'User not found' });
     }
+    const toWallet = await User.getWalletAddress(to_user_id);
+
+    const fromWallet = await User.getWalletAddress(from_user_id);
+    console.log(`Transferring ${transferAmount} from ${fromWallet} to ${toWallet}`);
+    console.log(await User.getIlpPrivateKeyPath(from_user_id));
+
+    await WalletTest.pay(from_user_id, 'https://ilp.interledger-test.dev/alice_chapulines', transferAmount);
 
     const canAccessFrom = fromUser.id === user.id || fromUser.parent_id === user.id;
     const canAccessTo = toUser.id === user.id || toUser.parent_id === user.id;
@@ -195,150 +206,6 @@ router.post('/transfer', isAuthenticated, async (req, res) => {
   }
 });
 
-// RUTA 4: Complete transfer (original)
-router.post('/complete-transfer/:transactionId', isAuthenticated, async (req, res) => {
-  try {
-    const { transactionId } = req.params;
-    await Transaction.completePendingTransaction(transactionId);
-    res.json({ success: true, message: 'Transfer completed successfully' });
-  } catch (error) {
-    console.error('Complete transfer error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
-// API Endpoints for KidBank
-router.post('/api/complete-task', isAuthenticated, async (req, res) => {
-  try {
-    const user = await User.findById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    
-    const { taskId } = req.body;
-    const taskReward = 5; // This would come from your task database
-    const taskStars = 10;
-
-    // Get user's wallet
-    let wallet = await Wallet.findByUserId(user.id);
-    if (!wallet) {
-      return res.status(404).json({ error: 'Wallet not found' });
-    }
-
-    // Create a transaction for the task reward
-    const description = `Task Reward: Task #${taskId}`;
-    await Transaction.create(null, user.id, taskReward, description);
-
-    res.json({
-      success: true,
-      earnedMoney: taskReward,
-      earnedStars: taskStars,
-      message: 'Task completed successfully!'
-    });
-  } catch (error) {
-    console.error('Complete task error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add money endpoint (requires parent approval)
-router.post('/api/add-money', isAuthenticated, async (req, res) => {
-  try {
-    console.log('Add money request from user:', req.session.userId);
-    
-    if (!req.session.userId) {
-      console.error('No userId in session');
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    const user = await User.findById(req.session.userId);
-    console.log('Found user:', user ? 'yes' : 'no');
-    
-    if (!user) {
-      console.error('User not found with id:', req.session.userId);
-      return res.status(404).json({ error: 'User not found' });
-    
-    const { amount, description } = req.body;
-    const transferAmount = parseFloat(amount);
-
-    if (transferAmount <= 0) {
-      return res.status(400).json({ error: 'Amount must be positive' });
-    }
-
-    // If it's a child, require parent approval
-    if (user.account_type === 'child' && user.parent_id) {
-      // Create a pending transaction that requires parent approval
-      const result = await Transaction.create(null, user.id, transferAmount, description || 'Added money to wallet');
-      
-      if (result.requiresInteraction) {
-        return res.json({
-          success: false,
-          requiresInteraction: true,
-          interactUrl: result.interactUrl,
-          transactionId: result.transactionId,
-          message: 'Waiting for parent approval'
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Added $${transferAmount} to your wallet!`
-    });
-  } catch (error) {
-    console.error('Add money error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Send money endpoint
-router.post('/api/send-money', isAuthenticated, async (req, res) => {
-  try {
-    const user = await User.findById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const { to_user_id, amount, description } = req.body;
-    const transferAmount = parseFloat(amount);
-
-    if (transferAmount <= 0) {
-      return res.status(400).json({ error: 'Amount must be positive' });
-    }
-
-    // Check if sender has enough balance
-    const senderWallet = await Wallet.findByUserId(user.id);
-    if (!senderWallet) {
-      return res.status(404).json({ error: 'Sender wallet not found' });
-    }
-
-    const balance = await Wallet.getBalance(senderWallet.id);
-    if (balance < transferAmount) {
-      return res.status(400).json({ error: 'Insufficient balance' });
-    }
-
-    // If child is sending money, require parent approval
-    if (user.account_type === 'child' && user.parent_id) {
-      const result = await Transaction.create(user.id, to_user_id, transferAmount, description || 'Sent money');
-      
-      if (result.requiresInteraction) {
-        return res.json({
-          success: false,
-          requiresInteraction: true,
-          interactUrl: result.interactUrl,
-          transactionId: result.transactionId,
-          message: 'Waiting for parent approval'
-        });
-      }
-    } else {
-      await Transaction.create(user.id, to_user_id, transferAmount, description || 'Sent money');
-    }
-
-    res.json({
-      success: true,
-      message: `Sent $${transferAmount} successfully!`
-    });
-  } catch (error) {
-    console.error('Send money error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// IMPORTANTE: Esto debe ser lo último
 module.exports = router;
+

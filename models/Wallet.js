@@ -1,24 +1,20 @@
 const { db } = require('../db/firebase');
 const { FieldValue } = require('firebase-admin/firestore');
-const { getWalletAddress } = require('../services/interledgerClient');
 
 class Wallet {
   static collection() {
     return db.collection('wallets');
   }
 
-  /**
-   * Create a wallet document linking user to their ILP wallet address
-   * @param {string} userId - Firestore user ID
-   * @param {string} walletAddressUrl - Full Interledger wallet address URL
-   */
-  static async create(userId, walletAddressUrl) {
-    const ref = this.collection().doc(userId);
-    await ref.set({
+  static async create(userId, walletAddressUrl = null) {
+    const payload = {
       user_id: userId,
       wallet_address_url: walletAddressUrl,
-      created_at: FieldValue.serverTimestamp(),
-    }, { merge: true });
+      balance: 0,
+      created_at: FieldValue.serverTimestamp()
+    };
+    const ref = this.collection().doc(userId);
+    await ref.set(payload, { merge: true });
     return ref.id;
   }
 
@@ -34,22 +30,17 @@ class Wallet {
     return { id: doc.id, ...doc.data() };
   }
 
-  /**
-   * Get live balance from Interledger wallet address
-   * @param {string} walletId - User ID (wallet document ID)
-   * @returns {Promise<number>} Balance as a number
-   */
+  static async updateBalance(walletId, newBalance) {
+    await this.collection().doc(walletId).set({ balance: newBalance, updated_at: FieldValue.serverTimestamp() }, { merge: true });
+  }
+
   static async getBalance(walletId) {
     const wallet = await this.findById(walletId);
     if (!wallet || !wallet.wallet_address_url) return 0;
 
     try {
-      const walletAddress = await getWalletAddress(wallet.wallet_address_url);
-      // Note: Open Payments wallet addresses don't expose balance directly in the standard API.
-      // You may need to query incoming/outgoing payments or maintain local balance tracking.
-      // For now, returning 0 as placeholder. Adjust based on your ILP provider's capabilities.
-      console.warn('Balance querying not yet implemented for ILP wallet addresses');
-      return 0;
+      // Placeholder: querying live balances may not be supported by provider.
+      return wallet.balance || 0;
     } catch (err) {
       console.error('Error fetching ILP wallet balance:', err.message);
       return 0;
