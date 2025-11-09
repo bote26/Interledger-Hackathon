@@ -3,7 +3,7 @@ Team "Los Chapulines" hackathon project
 
 ## Open Payments Application with Father/Child Account Management
 
-A web-based open payments application built with Node.js that allows parent accounts (fathers) to manage child accounts and transfer money between wallets.
+A web-based open payments application built with Node.js that allows parent accounts to manage child accounts and transfer money between wallets. We believe that financial culture and knowledge should be fostered since childhood and that the best way to learn something is by doing it.
 
 ## Features
 
@@ -18,18 +18,16 @@ A web-based open payments application built with Node.js that allows parent acco
 
 - **Wallet System**:
   - Each user has a wallet with USD balance
-  - Initial balance of $100 for new accounts
+  - Initial balance of $0 for new accounts
   - Real-time balance updates
 
 - **Transfer Functionality**:
   - Father accounts can transfer money between any wallets they control
   - Transfer from own wallet to child wallets
-  - Transfer from child wallets to own wallet
-  - Transfer between child wallets
   - Transaction history tracking
 
 - **Database**:
-  - SQLite database with proper schema
+  - Google Firebase database with proper schemas
   - User data storage
   - Wallet management
   - Transaction logging
@@ -40,7 +38,13 @@ A web-based open payments application built with Node.js that allows parent acco
   - Address
   - Phone number
   - ID number (Driver's License, Passport, etc.)
-  - Auto-verification for demo purposes
+  - Unique token in email verification 
+
+## Prerequisites
+
+- Node version v22.21.1
+- Npm already installed
+- Having a Firebase connection and a firebase_conn.json
 
 ## Installation
 
@@ -51,7 +55,7 @@ cd Interledger-Hackathon
 ```
 
 2. Install dependencies:
-```bash
+```bash 
 npm install
 ```
 
@@ -60,11 +64,13 @@ npm install
 cp .env.example .env
 ```
 
-4. Edit `.env` file and set your configuration (optional):
+4. Edit `.env` file and set your configuration:
 ```
-PORT=3000
-SESSION_SECRET=your-secret-key-change-in-production
-NODE_ENV=development
+APP_BASE_URL=http://localhost:3000
+EMAIL_SERVICE=your_email_provider
+EMAIL_USER=your_email
+EMAIL_PASS=your_email_app_web_password
+FIREBASE_SERVICE_ACCOUNT_PATH=path_of_firebase_connection
 ```
 
 ## Usage
@@ -84,10 +90,12 @@ npm run dev
 http://localhost:3000
 ```
 
+
 3. Register a new account:
    - Choose account type (Father or Child)
    - Fill in KYC information
    - If creating a child account, provide parent's email
+   - For KYC to work, you should enter the link in the device who is hosting the local page
 
 4. Login with your credentials
 
@@ -96,16 +104,17 @@ http://localhost:3000
    - See child accounts (for father accounts)
    - Transfer money between wallets
    - View transaction history
+   - Manage your finances (For children)
 
 ## Project Structure
 
 ```
 Interledger-Hackathon/
 ├── db/
-│   └── database.js          # Database setup and schema
+│   └── firebase.js          # Database setup and schema
 ├── models/
 │   ├── User.js              # User model
-│   ├── Wallet.js            # Wallet model
+│   ├── Wallets.js           # Wallet model
 │   └── Transaction.js       # Transaction model
 ├── routes/
 │   ├── auth.js              # Authentication routes
@@ -113,22 +122,24 @@ Interledger-Hackathon/
 ├── views/
 │   ├── login.ejs            # Login page
 │   ├── register.ejs         # Registration page with KYC
-│   ├── dashboard-father.ejs # Dashboard for father accounts
-│   └── dashboard-child.ejs  # Dashboard for child accounts
+│   ├── parentbank.ejs       # Dashboard for father accounts
+│   └── kidbank.ejs          # Dashboard for child accounts
 ├── public/
 │   ├── css/
 │   │   └── style.css        # Styles
+│   │   └── kidbank.css      # Style for the kids dashboard
 │   └── js/
 │       └── dashboard.js     # Frontend JavaScript
 ├── server.js                # Main server file
 ├── package.json             # Dependencies
+├── package-lock.json        # Specific dependencies
 └── README.md                # This file
 ```
 
 ## Technologies Used
 
 - **Backend**: Node.js, Express.js
-- **Database**: SQLite (better-sqlite3)
+- **Database**: Firebase
 - **Template Engine**: EJS
 - **Authentication**: bcryptjs, express-session
 - **Frontend**: HTML, CSS, JavaScript
@@ -137,10 +148,7 @@ Interledger-Hackathon/
 
 - Password hashing with bcryptjs
 - Session-based authentication
-- SQL injection prevention with prepared statements
 - Input validation
-
-**Note**: This is a demo application. See [SECURITY.md](SECURITY.md) for production security requirements including rate limiting, HTTPS/SSL, and CSRF protection.
 
 ## Demo Flow
 
