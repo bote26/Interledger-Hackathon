@@ -67,8 +67,17 @@ function renderTransactions(tableEl, items) {
   }
   for (const it of items) {
     const tr = document.createElement('tr');
-    const date = new Date((it.updatedAt && it.updatedAt._seconds) ? it.updatedAt._seconds * 1000 : Date.now()).toLocaleString();
-    tr.innerHTML = `<td>${it.direction}</td><td>${it.assetCode || ''} ${it.amountAtomic ? (Number(it.amountAtomic) / (10 ** (it.assetScale || 0))).toFixed(it.assetScale || 0) : ''}</td><td>${it.status || ''}</td><td>${date}</td>`;
+    let date;
+    if (it.updatedAt && typeof it.updatedAt === 'string') {
+      date = new Date(it.updatedAt).toLocaleString();
+    } else if (it.updatedAt && it.updatedAt._seconds) {
+      date = new Date(it.updatedAt._seconds * 1000).toLocaleString();
+    } else {
+      date = new Date().toLocaleString();
+    }
+    const scale = (it.assetScale != null) ? it.assetScale : 2; // default to cents when missing
+    const amount = it.amountAtomic ? (Number(it.amountAtomic) / (10 ** (scale))).toFixed(scale) : '';
+    tr.innerHTML = `<td>${it.direction}</td><td>${it.assetCode || ''} ${amount}</td><td>${it.status || ''}</td><td>${date}</td>`;
     tableEl.appendChild(tr);
   }
 }
@@ -115,4 +124,28 @@ if (userSelect) {
   });
   // load initial value
   if (userSelect.value) loadUserData(userSelect.value);
+}
+
+const syncBtn = document.getElementById('sync-now-btn');
+if (syncBtn && userSelect) {
+  syncBtn.addEventListener('click', async () => {
+    const uid = userSelect.value;
+    if (!uid) return;
+    syncBtn.disabled = true;
+    syncBtn.textContent = 'Syncing...';
+    try {
+      const res = await fetch(`/dashboard/debug/sync/${uid}`, { method: 'POST', credentials: 'same-origin' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      console.log('Sync result', json);
+      // reload data
+      await loadUserData(uid);
+    } catch (err) {
+      console.error('Sync failed', err);
+      alert('Sync failed: ' + (err.message || err));
+    } finally {
+      syncBtn.disabled = false;
+      syncBtn.textContent = 'Sync Now';
+    }
+  });
 }

@@ -188,6 +188,7 @@ router.get('/api/user/:userId/transactions', isAuthenticated, async (req, res) =
     if (!requester) return res.status(401).json({ error: 'Unauthorized' });
 
     const userId = req.params.userId;
+    console.debug('[API] transactions request by', requester.id, 'for user', userId);
     if (requester.id !== userId && requester.account_type !== 'father') {
       return res.status(403).json({ error: 'Forbidden' });
     }
@@ -200,11 +201,26 @@ router.get('/api/user/:userId/transactions', isAuthenticated, async (req, res) =
     else if (direction === 'outgoing') q = q.where('direction', '==', 'outgoing');
 
     const snap = await q.get();
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const items = snap.docs.map(d => {
+      const data = d.data();
+      // Normalize updatedAt to an ISO string for safe JSON transport
+      let updatedAt = null;
+      if (data && data.updatedAt && typeof data.updatedAt.toDate === 'function') {
+        try { updatedAt = data.updatedAt.toDate().toISOString(); } catch (e) { updatedAt = null; }
+      } else if (data && data.updatedAt && data.updatedAt._seconds) {
+        updatedAt = new Date(data.updatedAt._seconds * 1000).toISOString();
+      } else if (data && data.updatedAt) {
+        try { updatedAt = new Date(data.updatedAt).toISOString(); } catch (e) { updatedAt = null; }
+      }
+      return { id: d.id, updatedAt, ...data };
+    });
     res.json({ items });
   } catch (err) {
     console.error('API transactions error:', err && err.message ? err.message : err);
-    res.status(500).json({ error: 'Internal error' });
+    // Return detailed error in development to help debugging
+    const payload = { error: err && err.message ? err.message : 'Internal error' };
+    if (process.env.NODE_ENV !== 'production') payload.stack = err && err.stack ? err.stack : undefined;
+    res.status(500).json(payload);
   }
 });
 
@@ -215,12 +231,20 @@ router.get('/api/user/:userId/balance', isAuthenticated, async (req, res) => {
     if (!requester) return res.status(401).json({ error: 'Unauthorized' });
 
     const userId = req.params.userId;
+    console.debug('[API] balance request by', requester.id, 'for user', userId);
     if (requester.id !== userId && requester.account_type !== 'father') {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
     const snap = await db.collection('balances').doc(String(userId)).get();
-    if (snap.exists) return res.json({ balance: snap.data() });
+    if (snap.exists) {
+      const data = snap.data();
+      // Normalize updatedAt
+      if (data && data.updatedAt && typeof data.updatedAt.toDate === 'function') {
+        try { data.updatedAt = data.updatedAt.toDate().toISOString(); } catch (e) { /* ignore */ }
+      }
+      return res.json({ balance: data });
+    }
 
     // Fallback: compute cached aggregation from transactions
     try {
@@ -231,7 +255,25 @@ router.get('/api/user/:userId/balance', isAuthenticated, async (req, res) => {
     }
   } catch (err) {
     console.error('API balance error:', err && err.message ? err.message : err);
-    res.status(500).json({ error: 'Internal error' });
+    const payload = { error: err && err.message ? err.message : 'Internal error' };
+    if (process.env.NODE_ENV !== 'production') payload.stack = err && err.stack ? err.stack : undefined;
+    res.status(500).json(payload);
+  }
+});
+
+// Debug: trigger a sync for a user (protected: same user or father)
+router.post('/debug/sync/:userId', isAuthenticated, async (req, res) => {
+  try {
+    const requester = await User.findById(req.session.userId);
+    if (!requester) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = req.params.userId;
+    if (requester.id !== userId && requester.account_type !== 'father') return res.status(403).json({ error: 'Forbidden' });
+
+    const result = await Transaction.syncUser(userId);
+    res.json({ result });
+  } catch (err) {
+    console.error('Debug sync error:', err && err.message ? err.message : err);
+    res.status(500).json({ error: err && err.message ? err.message : 'Internal error' });
   }
 });
 

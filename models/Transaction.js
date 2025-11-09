@@ -215,12 +215,13 @@ class Transaction {
 
       // Extract common fields if present
       const status = item.status || item.state || null;
-      const incomingAmount = item.incomingAmount || item.incoming_amount || null;
-      const debitAmount = item.debitAmount || item.debit_amount || null;
+  // Providers may use different property names for amounts. Accept common variants
+  const incomingAmount = item.incomingAmount || item.incoming_amount || item.receivedAmount || item.received_amount || null;
+  const debitAmount = item.debitAmount || item.debit_amount || item.debitAmount || item.debit_amount || null;
       const amountObj = incomingAmount || debitAmount || item.amount || null;
-      const amountValue = amountObj ? (amountObj.value ?? amountObj.amount ?? null) : null;
-      const assetCode = amountObj ? (amountObj.assetCode || amountObj.currency || null) : null;
-      const assetScale = amountObj ? (amountObj.assetScale ?? null) : null;
+  const amountValue = amountObj ? (amountObj.value ?? amountObj.amount ?? amountObj.amountAtomic ?? null) : null;
+  const assetCode = amountObj ? (amountObj.assetCode || amountObj.currency || amountObj.asset || null) : null;
+  const assetScale = amountObj ? (amountObj.assetScale ?? amountObj.scale ?? null) : null;
 
       const doc = {
         userId,
@@ -236,6 +237,8 @@ class Transaction {
       };
 
       batch.set(ref, doc, { merge: true });
+      // debug: log chosen tx id and amount info
+      try { console.debug('[Transaction._persistTransactions] user=', userId, 'tx=', txId, 'amountAtomic=', doc.amountAtomic, 'assetScale=', doc.assetScale); } catch (e) { }
         // accumulate batch sum (treat incoming as positive, outgoing as positive here,
         // we'll apply sign on update)
         if (amountValue) {
@@ -363,6 +366,73 @@ class Transaction {
       }
 
       return out;
+    }
+
+    /**
+     * Return a quick cached balance snapshot for a user.
+     * If a `balances/{userId}` doc exists, return that data normalized.
+     * Otherwise compute a simple aggregation from persisted `transactions`.
+     */
+    static async getCachedBalance(userId) {
+      try {
+        const ref = db.collection('balances').doc(String(userId));
+        const snap = await ref.get();
+        if (snap.exists) {
+          const data = snap.data();
+          return {
+            balanceHuman: data.balanceHuman ?? null,
+            balanceAtomic: data.balanceAtomic ?? null,
+            asset: {
+              assetCode: data.assetCode ?? null,
+              assetScale: data.assetScale ?? null
+            },
+            updatedAt: data.updatedAt || null
+          };
+        }
+
+        // Fallback: aggregate from transactions collection
+        const q = await db.collection('transactions').where('userId', '==', userId).get();
+        let total = 0n;
+        let assetCode = null;
+        let assetScale = null;
+        for (const d of q.docs) {
+          const t = d.data();
+          if (t && t.amountAtomic) {
+            try {
+              const a = BigInt(String(t.amountAtomic));
+              total += (t.direction === 'incoming') ? a : -a;
+            } catch (e) {
+              // ignore parse errors
+            }
+          }
+          assetCode = assetCode || t.assetCode || null;
+          assetScale = assetScale ?? (t.assetScale ?? null);
+        }
+
+        let human = null;
+        if (assetScale != null) {
+          try {
+            const scale = 10n ** BigInt(assetScale);
+            const intPart = total / scale;
+            const fracPart = (total < 0n ? -total : total) % scale;
+            const fracStr = fracPart.toString().padStart(Number(assetScale), '0');
+            human = `${intPart.toString()}.${fracStr}`;
+          } catch (e) {
+            human = total.toString();
+          }
+        } else {
+          human = total.toString();
+        }
+
+        return {
+          balanceHuman: human,
+          balanceAtomic: total.toString(),
+          asset: { assetCode, assetScale }
+        };
+      } catch (err) {
+        console.error('[Transaction.getCachedBalance] failed for', userId, err && err.message ? err.message : err);
+        throw err;
+      }
     }
 
     /**
